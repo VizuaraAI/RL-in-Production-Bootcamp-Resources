@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>The Race — decomposing PipelineRL into concurrency and in-flight weight updates</title>
-<meta name="description" content="PipelineRL's 2x speedup bundles two mechanisms. We separate them. Concurrency alone doubles throughput and cuts idle GPU-time 7x; in-flight weight updates work perfectly and buy nothing at small scale. Paper, code, live GPU visualizer.">
-<meta property="og:title" content="The Race — what actually makes PipelineRL fast?">
-<meta property="og:description" content="Three arms, one variable: when each GPU does what. Concurrency doubles throughput; in-flight updates are inert at 2 GPUs — and we explain the regime where they matter.">
+<title>Two Kinds of Asynchrony — what actually makes asynchronous RL fast</title>
+<meta name="description" content="Asynchronous RL changes two things at once: it stops the GPUs taking turns, and it stops the weights standing still. We separate them. Concurrency doubles throughput and cuts idle GPU-time 7x; in-flight weight updates work perfectly and buy nothing at small scale. Paper, code, live GPU visualizer.">
+<meta property="og:title" content="Two Kinds of Asynchrony — what actually makes asynchronous RL fast?">
+<meta property="og:description" content="Synchronous RL makes every GPU wait. Asynchronous RL breaks that lockstep twice over — concurrently, and mid-sequence. Only one of the two is worth the complexity at small scale.">
 <meta property="og:image" content="assets/g3_gpu_utilisation.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -95,10 +95,11 @@
 
 <header>
   <div class="wrap">
-    <h1 class="title">The <span class="em">Race</span></h1>
-    <p class="tag">PipelineRL reports a ≈2× speedup. That headline bundles <em>two</em> different
-    mechanisms. We separate them — and find that one does all the work, while the other is
-    flawless and useless at small scale.</p>
+    <h1 class="title">Two Kinds of <span class="em">Asynchrony</span></h1>
+    <p class="tag">Asynchronous RL changes two things at once: it stops the GPUs
+    <em>taking turns</em>, and it stops the weights <em>standing still</em>. Every reported
+    speedup bundles both. We separate them — and find that one does all the work, while the
+    other is flawless and useless at small scale.</p>
     <p class="authors"><strong>Rajat Dandekar</strong></p>
     <p class="aff">Vizuara AI Labs · RL in Production, Phase 2 · Project 06</p>
     <div class="links">
@@ -353,9 +354,9 @@ python3 scripts/publish_run.py runs/race1
 
   <div class="eyebrow">Reference</div>
   <h2 id="bibtex">Citation</h2>
-  <div class="bib">@techreport{dandekar2026race,
-  title  = {The Race: Decomposing PipelineRL into Concurrency and
-            In-Flight Weight Updates, and Measuring What Each One Buys},
+  <div class="bib">@techreport{dandekar2026asynchrony,
+  title  = {Two Kinds of Asynchrony: Separating Concurrency from
+            In-Flight Weight Updates in Asynchronous Reinforcement Learning},
   author = {Dandekar, Rajat},
   year   = {2026},
   institution = {Vizuara AI Labs},

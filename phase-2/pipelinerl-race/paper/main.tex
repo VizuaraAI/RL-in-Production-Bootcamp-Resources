@@ -8,8 +8,8 @@
 \definecolor{brick}{HTML}{8B3A3A}
 \newcommand{\slate}[1]{\textcolor{slate}{#1}}
 
-\title{\textbf{The Race:\\ Decomposing PipelineRL into Concurrency and In-Flight Weight
-Updates,\\ and Measuring What Each One Actually Buys}}
+\title{\textbf{Two Kinds of Asynchrony:\\ Separating Concurrency from In-Flight Weight
+Updates\\ in Asynchronous Reinforcement Learning}}
 \author{Rajat Dandekar\\ \small Vizuara AI Labs\\
 \small \texttt{pipelinerl-race.vercel.app}}
 \date{\today}
@@ -19,16 +19,22 @@ Updates,\\ and Measuring What Each One Actually Buys}}
 
 \begin{abstract}
 \noindent
-Reinforcement learning on language models alternates between two workloads that want
-opposite hardware: \emph{generation}, which is memory-bound and finishes at wildly different
-times per sequence, and \emph{training}, which is compute-bound and synchronous. Conventional
-RL frameworks such as veRL run them in turn, so the cluster idles while it waits for the
-slowest sequence in each batch. PipelineRL (Piché et al., 2025) removes that idle time by
-running generation and training \emph{concurrently} on disjoint GPUs and pushing new weights
-into the inference engine \emph{mid-sequence}, without discarding the KV cache. The reported
-speedup is ${\approx}2\times$ on 128 H100s.
-We observe that this headline bundles \emph{two} independent mechanisms, and that no published
-measurement separates them. We therefore run three arms that share model, data, GRPO
+\emph{Synchronous} reinforcement learning on language models alternates between two workloads
+that want opposite hardware: \emph{generation}, which is memory-bound and finishes at wildly
+different times per sequence, and \emph{training}, which is compute-bound and synchronous.
+Frameworks such as veRL run them in lockstep, so the cluster idles while it waits for the
+slowest sequence in each batch.
+
+\emph{Asynchronous} RL breaks that lockstep --- but it breaks it in two independent ways.
+PipelineRL (Piché et al., 2025) both runs generation and training \emph{concurrently} on
+disjoint GPUs, and pushes new weights into the running inference engine \emph{mid-sequence}
+without discarding the KV cache, reporting ${\approx}2\times$ on 128 H100s. These are
+different kinds of asynchrony: one \emph{spatial} --- different GPUs doing different things at
+the same moment --- and one \emph{temporal} --- the policy changing while a sequence is still
+being written. Every reported speedup bundles them, and no published measurement separates
+them.
+
+We therefore run three arms that share model, data, GRPO
 implementation, batch shape, seed, library versions and total GPU budget, and differ only in
 \emph{when each GPU does what}: (A) conventional alternation; (B) concurrent generation and
 training with weights applied between generation batches; (C) concurrent with genuine

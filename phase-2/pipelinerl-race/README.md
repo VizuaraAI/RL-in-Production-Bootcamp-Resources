@@ -1,7 +1,13 @@
-# The Race — Conventional RL vs PipelineRL, on your own GPUs
+# Two Kinds of Asynchrony — separating concurrency from in-flight weight updates
 
 **RL in Production · Phase 2 · Project 06**
-Companion to the lecture: [veRL & PipelineRL](https://rl-bootcamp-decks.vercel.app/lecture-p2-verl-pipelinerl/)
+Project page: **https://pipelinerl-race.vercel.app** ·
+Lecture: [veRL & PipelineRL](https://rl-bootcamp-decks.vercel.app/lecture-p2-verl-pipelinerl/)
+
+Asynchronous RL breaks synchronous lockstep in **two independent ways** — *spatially*, by
+letting different GPUs generate and train at the same moment, and *temporally*, by letting the
+policy change while a sequence is still being written. Every reported speedup bundles both.
+This project runs them apart.
 
 You are going to run the same RL algorithm **three times**, on the same model, the same data
 and the same number of GPUs — changing **only how the work is scheduled** — and measure what
