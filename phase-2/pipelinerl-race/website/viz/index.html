@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>The Race — GPU occupancy &amp; weight transfer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fraunces:opsz,wght@9..144,400;9..144,600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#F7F2E8; --paper2:#F1EBDE; --panel:#FDFAF3;
+    --ink:#1F1B16; --ink2:#4A4239; --ink3:#7C7165; --rule:#D8CFBE;
+    --gen:#8E6B2F;      /* ochre  — generation */
+    --train:#8B3A3A;    /* brick  — training   */
+    --sync:#4A5D7E;     /* slate  — weight transfer */
+    --wait:#6B4E7E;     /* plum   — blocked    */
+    --idle:#C9BFAC;     /* pale   — THE BUBBLE */
+    --good:#3D5A4A;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+       font-family:Inter,-apple-system,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  header{padding:22px 30px 10px}
+  h1{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:27px;margin:0 0 4px}
+  .sub{color:var(--ink3);font-size:14px;max-width:900px;line-height:1.5}
+  .wrap{display:grid;grid-template-columns:1fr 1fr;gap:18px;padding:14px 30px}
+  .arm{background:var(--panel);border:1px solid var(--rule);border-radius:14px;overflow:hidden}
+  .arm h2{font-family:Fraunces,Georgia,serif;font-size:18px;margin:0;padding:13px 18px 11px;
+          border-bottom:1px solid var(--rule);display:flex;justify-content:space-between;align-items:baseline}
+  .arm h2 .tag{font-family:JetBrains Mono,monospace;font-size:11px;color:var(--ink3);font-weight:400}
+  canvas{display:block;width:100%;height:290px}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--rule);
+         border-top:1px solid var(--rule)}
+  .stat{background:var(--panel);padding:9px 12px}
+  .stat .k{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink3)}
+  .stat .v{font-family:JetBrains Mono,monospace;font-size:16px;font-weight:500;margin-top:2px}
+  .stat.bubble .v{color:var(--train)}
+  .bar{height:7px;background:var(--paper2);border-radius:4px;overflow:hidden;margin-top:5px;
+       display:flex}
+  .bar i{display:block;height:100%}
+  .controls{padding:8px 30px 26px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+  button{font:inherit;font-size:13px;padding:7px 15px;border:1px solid var(--rule);
+         background:var(--panel);border-radius:8px;cursor:pointer;color:var(--ink)}
+  button:hover{background:var(--paper2)}
+  button.primary{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+  input[type=range]{flex:1;min-width:220px;accent-color:var(--sync)}
+  .clock{font-family:JetBrains Mono,monospace;font-size:14px;min-width:96px}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;padding:0 30px 10px;font-size:12px;color:var(--ink2)}
+  .legend span{display:flex;align-items:center;gap:6px}
+  .legend i{width:11px;height:11px;border-radius:3px;display:block}
+  .note{padding:4px 30px 30px;color:var(--ink3);font-size:12.5px;max-width:1100px;line-height:1.55}
+  .drop{margin:0 30px 14px;padding:14px;border:1.5px dashed var(--rule);border-radius:10px;
+        color:var(--ink3);font-size:13px;text-align:center}
+  .drop.hot{border-color:var(--sync);background:var(--paper2);color:var(--ink)}
+</style>
+</head>
+<body>
+<header>
+  <h1>The Race — which GPUs are working, and when</h1>
+  <p class="sub">Same model, same data, same GRPO, same total GPU budget. The only difference is
+  <em>scheduling</em>. Every rectangle is one physical GPU; its colour is what that GPU is doing at
+  this instant. Pale grey is <strong>idle</strong> — the bubble. Both panels are driven by the same
+  <code>events.jsonl</code> the training run actually emitted, so nothing here is an artist's impression.</p>
+</header>
+
+<div class="legend">
+  <span><i style="background:var(--gen)"></i>generating</span>
+  <span><i style="background:var(--train)"></i>training (fwd/bwd/step)</span>
+  <span><i style="background:var(--sync)"></i>weight transfer</span>
+  <span><i style="background:var(--wait)"></i>waiting on queue</span>
+  <span><i style="background:var(--idle)"></i>idle — wasted GPU-seconds</span>
+</div>
+
+<div class="wrap">
+  <div class="arm" id="arm-conventional">
+    <h2>Conventional RL <span class="tag">veRL-style · generate ⇄ train</span></h2>
+    <canvas></canvas>
+    <div class="stats">
+      <div class="stat"><div class="k">elapsed</div><div class="v" data-s="t">0.0s</div></div>
+      <div class="stat"><div class="k">samples</div><div class="v" data-s="n">0</div></div>
+      <div class="stat"><div class="k">mean reward</div><div class="v" data-s="r">—</div></div>
+      <div class="stat bubble"><div class="k">idle GPU-sec</div><div class="v" data-s="idle">0</div>
+        <div class="bar" data-s="bar"></div></div>
+    </div>
+  </div>
+  <div class="arm" id="arm-pipeline">
+    <h2>PipelineRL <span class="tag">concurrent · in-flight weights</span></h2>
+    <canvas></canvas>
+    <div class="stats">
+      <div class="stat"><div class="k">elapsed</div><div class="v" data-s="t">0.0s</div></div>
+      <div class="stat"><div class="k">samples</div><div class="v" data-s="n">0</div></div>
+      <div class="stat"><div class="k">mean reward</div><div class="v" data-s="r">—</div></div>
+      <div class="stat bubble"><div class="k">idle GPU-sec</div><div class="v" data-s="idle">0</div>
+        <div class="bar" data-s="bar"></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="controls">
+  <button class="primary" id="play">▶ Play</button>
+  <button id="restart">⟲ Restart</button>
+  <span class="clock" id="clock">t = 0.0 s</span>
+  <input type="range" id="scrub" min="0" max="1000" value="0" />
+  <button data-speed="1">1×</button>
+  <button data-speed="4">4×</button>
+  <button data-speed="20">20×</button>
+  <button data-speed="100">100×</button>
+</div>
+
+<div class="drop" id="drop">Drop a run's <code>events.jsonl</code> here (or two, one per arm) to replay a real run.
+  Nothing is uploaded — it is read in your browser.</div>
+
+<p class="note"><strong>How to read this.</strong> In the conventional arm all GPUs share the same
+job: they generate together, then they all stop and train together. Watch the batch drain near the
+end of each generation phase — sequences finish at different times, so GPUs go pale while the cluster
+waits for the slowest one. In PipelineRL the GPUs are split: the ochre ones never stop generating and
+the red ones never stop training, and the slate pulses are weights moving between them <em>without</em>
+generation pausing. The <span style="color:var(--train)">idle GPU-seconds</span> counter is the honest
+scoreboard — it is compute you paid for and did not use.</p>
+
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.169.0/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+const COL = { generating:0x8E6B2F, prefill:0xA88448, forward:0x8B3A3A, backward:0x8B3A3A,
+              optimizer_step:0xA84A4A, weight_sync:0x4A5D7E, waiting:0x6B4E7E, idle:0xC9BFAC };
+const PAPER = 0xF7F2E8;
+const BUSY = s => s !== 'idle' && s !== undefined;
+
+/* ---------------------------------------------------------------------------
+   One 3D panel = one arm. GPUs are cards standing in a row; a card's face colour
+   is its current state and a thin riser shows instantaneous intensity. Weight
+   transfers are arcs that travel from the training cards to the inference cards.
+--------------------------------------------------------------------------- */
+class ArmView {
+  constructor(root){
+    this.root = root;
+    this.canvas = root.querySelector('canvas');
+    this.renderer = new THREE.WebGLRenderer({canvas:this.canvas, antialias:true, alpha:true});
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.PerspectiveCamera(38, 2, 0.1, 100);
+    this.camera.position.set(0, 2.9, 7.0);
+    this.camera.lookAt(0, 1.05, 0);
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.78));
+    const key = new THREE.DirectionalLight(0xffffff, 0.85);
+    key.position.set(4, 8, 6); this.scene.add(key);
+    const rim = new THREE.DirectionalLight(0xffe9c9, 0.3);
+    rim.position.set(-5, 3, -4); this.scene.add(rim);
+
+    this.cards = [];        // gpu index -> {mesh, riser, label, state, role}
+    this.arcs  = [];        // live weight-transfer arcs
+    this.group = new THREE.Group(); this.scene.add(this.group);
+    this.resize();
+    new ResizeObserver(()=>this.resize()).observe(this.canvas);
+  }
+
+  resize(){
+    const w = this.canvas.clientWidth, h = this.canvas.clientHeight;
+    if(!w||!h) return;
+    this.renderer.setSize(w,h,false);
+    this.camera.aspect = w/h; this.camera.updateProjectionMatrix();
+  }
+
+  build(nGpus, roles){
+    this.group.clear(); this.cards = [];
+    const gap = 1.75, x0 = -((nGpus-1)*gap)/2;
+    for(let i=0;i<nGpus;i++){
+      const g = new THREE.Group();
+      g.position.set(x0 + i*gap, 0, 0);
+
+      // the card body — a GPU standing on edge
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(1.32, 1.72, 0.20),
+        new THREE.MeshStandardMaterial({color:COL.idle, roughness:0.62, metalness:0.05}));
+      body.position.y = 0.92; g.add(body);
+
+      // base plate
+      const base = new THREE.Mesh(new THREE.BoxGeometry(1.5,0.09,0.62),
+        new THREE.MeshStandardMaterial({color:0xE3DAC7, roughness:0.9}));
+      base.position.y = 0.045; g.add(base);
+
+      // intensity riser behind the card
+      const riser = new THREE.Mesh(new THREE.BoxGeometry(0.16,1.0,0.16),
+        new THREE.MeshStandardMaterial({color:COL.idle, roughness:0.5,
+          emissive:0x000000, emissiveIntensity:0.6}));
+      riser.position.set(0.86, 0.5, 0); riser.scale.y = 0.02; g.add(riser);
+
+      // role + id label as a sprite
+      const label = this.makeLabel(`GPU ${i}`, roles[i]||'');
+      label.position.set(0, 2.16, 0); g.add(label);
+
+      this.group.add(g);
+      this.cards.push({g, body, riser, label, state:'idle', role:roles[i]});
+    }
+  }
+
+  makeLabel(text, role){
+    const c = document.createElement('canvas'); c.width=256; c.height=96;
+    const x = c.getContext('2d');
+    x.fillStyle='rgba(0,0,0,0)'; x.fillRect(0,0,256,96);
+    x.font='600 38px Inter,sans-serif'; x.fillStyle='#1F1B16'; x.textAlign='center';
+    x.fillText(text,128,40);
+    x.font='400 26px JetBrains Mono,monospace'; x.fillStyle='#7C7165';
+    x.fillText(role,128,76);
+    const t = new THREE.CanvasTexture(c); t.anisotropy=4;
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({map:t, transparent:true}));
+    s.scale.set(1.7,0.64,1); return s;
+  }
+
+  setState(gpu, state, intensity=1){
+    const c = this.cards[gpu]; if(!c) return;
+    c.state = state;
+    const col = COL[state] ?? COL.idle;
+    c.body.material.color.setHex(col);
+    c.riser.material.color.setHex(col);
+    c.riser.material.emissive.setHex(BUSY(state)?col:0x000000);
+    const target = BUSY(state) ? Math.max(0.1, Math.min(1, intensity)) : 0.02;
+    c.riser.scale.y = target;
+    c.riser.position.y = target/2;
+    // idle cards sink slightly and desaturate — makes the bubble read at a glance
+    c.g.position.y = BUSY(state) ? 0 : -0.14;
+  }
+
+  addArc(srcGpus, dstGpus, inflight){
+    for(const s of srcGpus) for(const d of dstGpus){
+      const a = this.cards[s], b = this.cards[d];
+      if(!a||!b) continue;
+      const p0 = new THREE.Vector3(a.g.position.x, 1.55, 0);
+      const p1 = new THREE.Vector3(b.g.position.x, 1.55, 0);
+      const mid = p0.clone().add(p1).multiplyScalar(0.5); mid.y += 1.5;
+      const curve = new THREE.QuadraticBezierCurve3(p0, mid, p1);
+      const geo = new THREE.TubeGeometry(curve, 26, 0.045, 8, false);
+      const mat = new THREE.MeshStandardMaterial({
+        color: inflight ? 0x4A5D7E : 0x9A8B72, transparent:true, opacity:0.95,
+        emissive: inflight ? 0x2C3D5E : 0x000000, emissiveIntensity:0.8});
+      const mesh = new THREE.Mesh(geo, mat);
+      this.group.add(mesh);
+      this.arcs.push({mesh, born:performance.now(), ttl: inflight?700:1500});
+    }
+  }
+
+  tick(){
+    const now = performance.now();
+    this.arcs = this.arcs.filter(a=>{
+      const age = (now-a.born)/a.ttl;
+      if(age>=1){ this.group.remove(a.mesh); a.mesh.geometry.dispose(); a.mesh.material.dispose(); return false; }
+      a.mesh.material.opacity = 0.95*(1-age);
+      a.mesh.scale.setScalar(1+age*0.25);
+      return true;
+    });
+    this.renderer.render(this.scene, this.camera);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Replay engine: consumes the event stream and drives an ArmView.
+--------------------------------------------------------------------------- */
+class ArmRun {
+  constructor(view, root){ this.view=view; this.root=root; this.reset([]); }
+
+  reset(rawEvents){
+    this.rawEvents = rawEvents;
+    // Re-base the clock on the "ready" marker, exactly as race/metrics.py does. Everything
+    // before it is one-off engine startup (weight load, torch.compile, CUDA-graph capture)
+    // — real cost, but not the scheduling bubble this page is about, and it can be ~90% of
+    // a short run. Pre-ready events are replayed to establish initial GPU state, then time
+    // starts at zero. Without this the animation is mostly an empty cluster and the two
+    // panels drift apart purely because their startups differ in length.
+    const readyT = (rawEvents.find(e => e.kind==='phase' && e.name==='ready') || {}).t ?? 0;
+    this.readyT = readyT;
+    const events = rawEvents
+      .filter(e => e.t >= readyT)
+      .map(e => ({...e, t: e.t - readyT}));
+    this.preReady = rawEvents.filter(e => e.t < readyT && e.kind === 'gpu');
+
+    this.events = events; this.i = 0; this.t = 0;
+    this.nGpus = 0; this.roles = {};
+    this.samples = []; this.idleGpuSec = 0; this.busyGpuSec = 0;
+    this.lastT = 0; this.stateOf = {}; this.updates = 0;
+    const run = rawEvents.find(e=>e.kind==='run');
+    if(run){ this.nGpus = run.detail?.n_gpus || 0; }
+    // pre-scan roles so cards are labelled correctly before playback
+    for(const e of rawEvents){ if(e.kind==='gpu'){ this.roles[e.gpu]=e.role;
+      this.nGpus=Math.max(this.nGpus,e.gpu+1);} }
+    this.duration = events.length ? events[events.length-1].t : 0;
+    const tag = this.root.querySelector('h2 .tag');
+    if(tag && readyT) tag.textContent = tag.textContent.split(' · setup')[0]
+      + ` · setup ${readyT.toFixed(0)}s (excluded)`;
+    this.view.build(this.nGpus, this.roles);
+    for(let i=0;i<this.nGpus;i++) this.view.setState(i,'idle');
+    for(const e of this.preReady){ this.stateOf[e.gpu]=e.state;
+      this.view.setState(e.gpu, e.state); }
+    this.paint();
+  }
+
+  seek(t){
+    if(t < this.t){ // rewind: replay from scratch (streams are small enough)
+      this.reset(this.rawEvents);
+    }
+    while(this.i < this.events.length && this.events[this.i].t <= t){
+      this.apply(this.events[this.i++], t);
+    }
+    this.accrue(t);
+    this.t = t;
+    this.paint();
+  }
+
+  accrue(t){
+    // Clamp to THIS arm's own end. The two panels share one clock that runs to the longer
+    // arm's duration, so without this the shorter arm keeps banking idle GPU-seconds after
+    // its run finished — inflating exactly the number this page presents as the scoreboard,
+    // and disagreeing with race/metrics.py (caught at 365.9 here vs 251.4 there).
+    const end = this.duration ?? Infinity;
+    const tc = Math.min(t, end);
+    const dt = Math.max(0, tc - this.lastT); this.lastT = tc;
+    if(!dt) return;
+    for(let g=0; g<this.nGpus; g++){
+      if(BUSY(this.stateOf[g])) this.busyGpuSec += dt; else this.idleGpuSec += dt;
+    }
+  }
+
+  apply(e, t){
+    this.accrue(e.t);
+    if(e.kind==='gpu'){
+      this.stateOf[e.gpu] = e.state;
+      const seqs = e.detail?.seqs;
+      this.view.setState(e.gpu, e.state, seqs ? Math.min(1, seqs/64) : 1);
+    } else if(e.kind==='weights'){
+      this.updates++;
+      this.view.addArc(e.src||[], e.dst||[], !!e.inflight);
+    } else if(e.kind==='sample'){
+      this.samples.push(e.reward);
+    }
+  }
+
+  paint(){
+    const q = s => this.root.querySelector(`[data-s="${s}"]`);
+    q('t').textContent = this.t.toFixed(1)+'s';
+    q('n').textContent = this.samples.length.toLocaleString();
+    q('r').textContent = this.samples.length
+      ? (this.samples.reduce((a,b)=>a+b,0)/this.samples.length).toFixed(3) : '—';
+    q('idle').textContent = this.idleGpuSec.toFixed(1);
+    const tot = this.idleGpuSec + this.busyGpuSec || 1;
+    q('bar').innerHTML =
+      `<i style="width:${(this.busyGpuSec/tot*100).toFixed(1)}%;background:var(--good)"></i>`+
+      `<i style="width:${(this.idleGpuSec/tot*100).toFixed(1)}%;background:var(--idle)"></i>`;
+  }
+}
+
+/* --------------------------------- wiring -------------------------------- */
+const views = {
+  conventional: new ArmView(document.getElementById('arm-conventional')),
+  pipeline:     new ArmView(document.getElementById('arm-pipeline')),
+};
+const runs = {
+  conventional: new ArmRun(views.conventional, document.getElementById('arm-conventional')),
+  pipeline:     new ArmRun(views.pipeline,     document.getElementById('arm-pipeline')),
+};
+
+let playing=false, speed=4, clock=0, last=performance.now();
+const scrub = document.getElementById('scrub'), clockEl = document.getElementById('clock');
+const duration = () => Math.max(runs.conventional.duration, runs.pipeline.duration, 1);
+
+document.getElementById('play').onclick = e => {
+  playing = !playing; e.target.textContent = playing ? '❚❚ Pause' : '▶ Play'; last=performance.now();
+};
+document.getElementById('restart').onclick = () => { clock=0; seekAll(0); };
+scrub.oninput = () => { clock = (+scrub.value/1000)*duration(); seekAll(clock); };
+for(const b of document.querySelectorAll('[data-speed]'))
+  b.onclick = () => { speed = +b.dataset.speed; };
+
+function seekAll(t){ for(const k in runs) runs[k].seek(t);
+  clockEl.textContent = `t = ${t.toFixed(1)} s`;
+  scrub.value = Math.round(t/duration()*1000); }
+
+function frame(){
+  const now = performance.now(), dt = (now-last)/1000; last = now;
+  if(playing){
+    clock = Math.min(duration(), clock + dt*speed);
+    seekAll(clock);
+    if(clock >= duration()) { playing=false; document.getElementById('play').textContent='▶ Play'; }
+  }
+  views.conventional.tick(); views.pipeline.tick();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+/* ---- loading real runs ---- */
+function parse(text){
+  return text.split('\n').filter(Boolean).map(l=>{try{return JSON.parse(l)}catch{return null}})
+             .filter(Boolean).sort((a,b)=>a.t-b.t);
+}
+function loadInto(arm, events){
+  runs[arm].reset(events); clock=0; seekAll(0);
+}
+const drop = document.getElementById('drop');
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('hot'); };
+drop.ondragleave = () => drop.classList.remove('hot');
+drop.ondrop = async e => {
+  e.preventDefault(); drop.classList.remove('hot');
+  for(const f of e.dataTransfer.files){
+    const ev = parse(await f.text());
+    const run = ev.find(x=>x.kind==='run');
+    const arm = run?.detail?.arm?.startsWith('pipe') ? 'pipeline' : 'conventional';
+    loadInto(arm, ev);
+    drop.textContent = `Loaded ${f.name} → ${arm} (${ev.length.toLocaleString()} events)`;
+  }
+};
+
+// Auto-load a bundled reference run if present.
+for(const arm of ['conventional','pipeline']){
+  fetch(`./runs/${arm}/events.jsonl`).then(r=>r.ok?r.text():null).then(t=>{
+    if(t) loadInto(arm, parse(t));
+  }).catch(()=>{});
+}
+</script>
+</body>
+</html>

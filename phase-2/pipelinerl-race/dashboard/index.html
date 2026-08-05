@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>The Race — cohort results</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fraunces:opsz,wght@9..144,400;9..144,600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{--paper:#F7F2E8;--paper2:#F1EBDE;--panel:#FDFAF3;--ink:#1F1B16;--ink2:#4A4239;
+        --ink3:#7C7165;--rule:#D8CFBE;--gen:#8E6B2F;--train:#8B3A3A;--sync:#4A5D7E;--good:#3D5A4A}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:Inter,system-ui,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .page{max-width:1120px;margin:0 auto;padding:30px 26px 70px}
+  h1{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:30px;margin:0 0 6px}
+  .sub{color:var(--ink3);font-size:14.5px;line-height:1.55;max-width:760px}
+  h2{font-family:Fraunces,Georgia,serif;font-size:20px;margin:34px 0 12px}
+  .drop{margin:22px 0;padding:26px;border:1.5px dashed var(--rule);border-radius:12px;
+        text-align:center;color:var(--ink3);font-size:14px;cursor:pointer;background:var(--panel)}
+  .drop.hot{border-color:var(--sync);background:var(--paper2);color:var(--ink)}
+  #out{overflow-x:auto}
+  table{width:100%;min-width:860px;border-collapse:collapse;font-size:13.5px;
+        background:var(--panel);border:1px solid var(--rule);border-radius:10px}
+  th:first-child,td:first-child{position:sticky;left:0;background:inherit}
+  tr.ref td:first-child{background:#FBF6EC}
+  th:first-child{background:var(--paper2)}
+  th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;
+     color:var(--ink3);font-weight:600;padding:10px 12px;border-bottom:1px solid var(--rule);
+     background:var(--paper2)}
+  td{padding:10px 12px;border-bottom:1px solid var(--rule);font-family:JetBrains Mono,monospace}
+  td.name{font-family:Inter,sans-serif}
+  tr:last-child td{border-bottom:none}
+  tr.ref{background:#FBF6EC}
+  .win{color:var(--good);font-weight:600}
+  .lose{color:var(--ink3)}
+  .pill{display:inline-block;font-size:10.5px;padding:2px 8px;border-radius:20px;
+        background:var(--paper2);border:1px solid var(--rule);color:var(--ink2);
+        font-family:Inter,sans-serif}
+  .pill.warn{background:#F6E9E4;border-color:#D9B7AB;color:#8B3A3A}
+  .note{color:var(--ink3);font-size:12.5px;line-height:1.6;margin-top:10px}
+  .empty{padding:34px;text-align:center;color:var(--ink3);font-size:14px;
+         background:var(--panel);border:1px solid var(--rule);border-radius:10px}
+  code{font-family:JetBrains Mono,monospace;font-size:.92em;background:var(--paper2);
+       padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>The Race — cohort results</h1>
+  <p class="sub">Drop your <code>reports/summary.json</code> below to see your run against the
+  reference and against the rest of the cohort. Everything is computed in your browser — nothing
+  is uploaded anywhere.</p>
+
+  <div class="drop" id="drop">
+    Drop <code>summary.json</code> here, or click to choose
+    <input type="file" id="file" accept=".json" multiple hidden>
+  </div>
+
+  <h2>Results</h2>
+  <div id="out"><div class="empty">No runs loaded yet.</div></div>
+
+  <h2>How to read this</h2>
+  <p class="note">
+    <strong>GPU busy %</strong> is the honest systems number: what fraction of the GPU-seconds you
+    paid for were actually doing work. <strong>Samples/s</strong> is throughput.
+    <strong>Mean reward</strong> is effectiveness. Learning speed is roughly the product — a run
+    that wins on throughput but loses badly on reward has not won.<br><br>
+    <strong>Mean lag</strong> only applies to PipelineRL: how many optimizer steps stale the
+    training data was. Near zero means your generators are barely ahead of your trainers (you could
+    give generation more GPUs); a large value means the split is lopsided the other way.<br><br>
+    A <span class="pill warn">cpu transport</span> or <span class="pill warn">not in-flight</span>
+    badge means that run did not use the real PipelineRL weight path, so its transfer cost is
+    inflated and its numbers are not comparable to runs that did. That is worth saying out loud
+    rather than quietly averaging in.
+  </p>
+</div>
+
+<script>
+const REF_URL = './reference/summary.json';
+const runs = [];   // {label, arm, data}
+
+const fmt = (v, d=3) => v === null || v === undefined ? '—'
+  : (typeof v === 'number' ? (Number.isInteger(v) ? v.toLocaleString() : v.toFixed(d)) : v);
+
+function addSummary(label, obj, isRef=false){
+  for(const arm of Object.keys(obj)){
+    const d = obj[arm];
+    if(!d || typeof d !== 'object') continue;
+    runs.push({label, arm, isRef, d});
+  }
+  render();
+}
+
+function render(){
+  const out = document.getElementById('out');
+  if(!runs.length){ out.innerHTML = '<div class="empty">No runs loaded yet.</div>'; return; }
+
+  // best value per column, to mark the winner
+  const best = {
+    mean_reward: Math.max(...runs.map(r => r.d.mean_reward ?? -Infinity)),
+    samples_per_s: Math.max(...runs.map(r => r.d.samples_per_s ?? -Infinity)),
+    gpu_busy_frac: Math.max(...runs.map(r => r.d.gpu_busy_frac ?? -Infinity)),
+  };
+
+  const rows = runs.map(r => {
+    const d = r.d;
+    const badges = [];
+    if(d.synthetic) badges.push('<span class="pill warn">synthetic</span>');
+    if(r.arm === 'pipeline' && d.weight_updates && !d.inflight_updates)
+      badges.push('<span class="pill warn">not in-flight</span>');
+    if(d.transport === 'cpu') badges.push('<span class="pill warn">cpu transport</span>');
+    const cell = (k, v, dec=3) => {
+      const w = v !== null && v !== undefined && v === best[k];
+      return `<td class="${w?'win':''}">${fmt(v, dec)}</td>`;
+    };
+    return `<tr class="${r.isRef?'ref':''}">
+      <td class="name"><strong>${r.label}</strong> ${badges.join(' ')}</td>
+      <td class="name">${r.arm}</td>
+      <td>${fmt(d.n_gpus)}</td>
+      <td>${fmt(d.duration_s,0)}</td>
+      ${cell('mean_reward', d.mean_reward)}
+      ${cell('samples_per_s', d.samples_per_s)}
+      ${cell('gpu_busy_frac', d.gpu_busy_frac != null ? d.gpu_busy_frac*100 : null, 1)}
+      <td>${fmt(d.idle_gpu_s,1)}</td>
+      <td>${fmt(d.mean_lag)}</td>
+      <td>${fmt(d.weight_updates)}</td>
+    </tr>`;
+  }).join('');
+
+  out.innerHTML = `<table>
+    <tr><th>run</th><th>arm</th><th>gpus</th><th>dur s</th><th>mean reward</th>
+        <th>samples/s</th><th>gpu busy %</th><th>idle gpu-s</th><th>mean lag</th><th>wt updates</th></tr>
+    ${rows}</table>`;
+}
+
+/* ---- loading ---- */
+const drop = document.getElementById('drop'), file = document.getElementById('file');
+drop.onclick = () => file.click();
+file.onchange = e => [...e.target.files].forEach(readFile);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('hot'); };
+drop.ondragleave = () => drop.classList.remove('hot');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('hot');
+                     [...e.dataTransfer.files].forEach(readFile); };
+
+async function readFile(f){
+  try {
+    const obj = JSON.parse(await f.text());
+    addSummary(f.name.replace(/\.json$/,''), obj);
+  } catch(err){
+    alert(`Could not read ${f.name}: ${err.message}\n\nExpected the summary.json produced by\n  python3 -m race.metrics runs/<id> reports/`);
+  }
+}
+
+fetch(REF_URL).then(r => r.ok ? r.json() : null)
+  .then(o => { if(o) addSummary('reference (Vizuara)', o, true); })
+  .catch(()=>{});
+</script>
+</body>
+</html>

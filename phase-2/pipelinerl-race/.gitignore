@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv*/
+logs/
+runs/
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/build*.log
+viz/runs/
+website/viz/runs/
+website/assets/pb/.cache/

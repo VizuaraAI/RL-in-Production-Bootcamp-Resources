@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Race — decomposing PipelineRL into concurrency and in-flight weight updates</title>
+<meta name="description" content="PipelineRL's 2x speedup bundles two mechanisms. We separate them. Concurrency alone doubles throughput and cuts idle GPU-time 7x; in-flight weight updates work perfectly and buy nothing at small scale. Paper, code, live GPU visualizer.">
+<meta property="og:title" content="The Race — what actually makes PipelineRL fast?">
+<meta property="og:description" content="Three arms, one variable: when each GPU does what. Concurrency doubles throughput; in-flight updates are inert at 2 GPUs — and we explain the regime where they matter.">
+<meta property="og:image" content="assets/g3_gpu_utilisation.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#ffffff; --ink:#161a20; --mut:#5c626f; --line:#e8eaef; --soft:#f6f7f9; --soft-2:#eef1f6;
+    --slate:#3f5c8f; --slate-d:#2c4269; --ochre:#a2761f; --brick:#a83c3c; --green:#2f7d5c;
+    --acc:#3f5c8f;
+    --shadow:0 14px 40px -22px rgba(30,41,59,.30);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.65;font-size:17px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+  a{color:var(--acc);text-decoration:none}
+  a:hover{text-decoration:underline}
+  h1,h2,h3{line-height:1.22;font-weight:700;letter-spacing:-.02em}
+  h2{font-size:27px;margin:56px 0 6px}
+  .eyebrow{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:500;letter-spacing:.18em;
+    text-transform:uppercase;color:var(--acc);margin:56px 0 2px}
+  .eyebrow + h2{margin-top:2px}
+  h3{font-size:19px;margin:26px 0 8px}
+  p{margin:12px 0}
+  .lead{font-size:18.5px;color:var(--mut);max-width:70ch}
+  code{background:var(--soft);border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:.86em;
+    font-family:'JetBrains Mono',ui-monospace,Menlo,monospace}
+  header{padding:52px 0 10px;text-align:center;border-bottom:1px solid var(--line)}
+  .title{font-size:44px;letter-spacing:-.03em;margin:0 0 8px}
+  .title .em{color:var(--acc)}
+  .tag{color:var(--mut);font-size:18.5px;margin:0 auto 18px;max-width:740px}
+  .authors{font-size:17px;margin:6px 0 2px}
+  .aff{color:var(--mut);font-size:15px;margin:0 0 20px}
+  .links{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:18px 0 6px}
+  .btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;
+    color:var(--ink);border-radius:10px;padding:10px 16px;font-size:15px;font-weight:600;transition:.15s;box-shadow:var(--shadow)}
+  .btn:hover{border-color:var(--acc);text-decoration:none;transform:translateY(-1px)}
+  .btn.primary{background:var(--acc);color:#fff;border-color:var(--acc)}
+  .hero{margin:30px 0 8px;text-align:center}
+  .hero img{width:100%;max-width:760px;border-radius:14px;
+    box-shadow:0 18px 48px -20px rgba(30,41,59,.42);border:1px solid var(--line)}
+  .cap{color:var(--mut);font-size:13.5px;margin:10px auto 0;max-width:680px}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:36px 0}
+  .stat{background:var(--soft);border:1px solid var(--line);border-radius:12px;padding:16px 12px;text-align:center}
+  .stat .n{font-size:27px;font-weight:800;color:var(--acc);letter-spacing:-.02em}
+  .stat .l{font-size:12.5px;color:var(--mut);margin-top:4px;line-height:1.35}
+  figure{margin:22px 0}
+  figure img{width:100%;border-radius:14px;border:1px solid var(--line);background:#fff}
+  figcaption{color:var(--mut);font-size:14px;margin-top:10px}
+  .two{display:grid;grid-template-columns:0.9fr 1.1fr;gap:36px;align-items:center;margin:14px 0}
+  .two.rev{grid-template-columns:1.1fr 0.9fr}
+  .two.rev .txt{order:2} .two.rev figure{order:1}
+  .two .txt h2{margin-top:0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+  .callout{border-left:3px solid var(--c,var(--acc));background:var(--soft);border:1px solid var(--line);
+    border-left-width:3px;border-radius:0 12px 12px 0;padding:12px 16px;margin:16px 0}
+  .callout .k{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--c,var(--acc))}
+  .callout p{margin:4px 0 0;font-size:15px;color:var(--mut)}
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:15.5px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line)}
+  th{color:var(--mut);font-weight:600;font-size:13px;text-transform:uppercase;letter-spacing:.03em}
+  td.n{text-align:right;font-variant-numeric:tabular-nums}
+  tr.hi td{background:rgba(63,92,143,.09);font-weight:700}
+  .arm{border:1px solid var(--line);border-radius:14px;padding:18px;background:#fff;box-shadow:var(--shadow)}
+  .arm h4{margin:0 0 6px;font-size:16px}
+  .arm .badge{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.1em;
+    text-transform:uppercase;padding:2px 8px;border-radius:20px;display:inline-block;margin-bottom:8px}
+  .arm p{font-size:14.5px;color:var(--mut);margin:6px 0 0}
+  pre{background:#12161d;color:#e6e9ef;border-radius:12px;padding:16px 18px;overflow-x:auto;
+    font-family:'JetBrains Mono',monospace;font-size:13.5px;line-height:1.6}
+  pre .c{color:#7f8a9e}
+  .bib{background:var(--soft);border:1px solid var(--line);border-radius:12px;padding:16px 18px;
+    font-family:'JetBrains Mono',monospace;font-size:13px;white-space:pre;overflow-x:auto;color:var(--mut)}
+  footer{border-top:1px solid var(--line);margin-top:64px;padding:26px 0 60px;color:var(--mut);font-size:14.5px}
+  @media(max-width:820px){
+    .stats{grid-template-columns:1fr 1fr}.two,.two.rev{grid-template-columns:1fr}
+    .two.rev .txt,.two.rev figure{order:unset}.grid2,.grid3{grid-template-columns:1fr}
+    .title{font-size:33px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <h1 class="title">The <span class="em">Race</span></h1>
+    <p class="tag">PipelineRL reports a ≈2× speedup. That headline bundles <em>two</em> different
+    mechanisms. We separate them — and find that one does all the work, while the other is
+    flawless and useless at small scale.</p>
+    <p class="authors"><strong>Rajat Dandekar</strong></p>
+    <p class="aff">Vizuara AI Labs · RL in Production, Phase 2 · Project 06</p>
+    <div class="links">
+      <a class="btn primary" href="assets/the-race.pdf">📄 Paper (PDF)</a>
+      <a class="btn" href="https://github.com/VizuaraAI/RL-in-Production-Bootcamp-Resources/tree/main/phase-2/pipelinerl-race" target="_blank">⌨ Code</a>
+      <a class="btn" href="https://rl-bootcamp-decks.vercel.app/lecture-p2-verl-pipelinerl/" target="_blank">▦ Lecture slides</a>
+      <a class="btn" href="viz/">◉ GPU visualizer</a>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="hero">
+    <img src="assets/pb/hero_three_arms.png" alt="One GPU budget, three schedules">
+    <p class="cap">The same GPUs and the same wall-clock, scheduled three ways. Conventional RL
+    alternates in blocks, with idle time between them. Concurrent RL splits the cluster so
+    neither role waits. In-flight updates deliver new weights <em>mid-sequence</em>. The pale bar
+    at the right of each lane is the compute that schedule wastes.</p>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="n">2.05×</div><div class="l">throughput from concurrency alone</div></div>
+    <div class="stat"><div class="n">7.2×</div><div class="l">less idle GPU-time</div></div>
+    <div class="stat"><div class="n">514/514</div><div class="l">weight updates landed mid-decode, KV cache retained</div></div>
+    <div class="stat"><div class="n">0.00×</div><div class="l">reward gain from in-flight updates at this scale</div></div>
+  </div>
+
+  <div class="eyebrow">Abstract</div>
+  <h2>Two mechanisms, one number.</h2>
+  <p class="lead">Reinforcement learning on a language model alternates between two workloads
+  that want opposite hardware. <strong>Generation</strong> is memory-bound and finishes at wildly
+  different times per sequence. <strong>Training</strong> is compute-bound and synchronous. Run
+  them on the same GPUs and one of them is always waiting.</p>
+  <p>PipelineRL removes that waiting with two changes at once: it <strong>partitions</strong> the
+  cluster so some GPUs generate forever while others train forever, and it pushes new weights
+  into the running inference engine <strong>mid-sequence</strong>, without discarding the KV cache.
+  The published comparison is conventional-versus-both. So of the reported speedup, how much is
+  the partition, and how much is the mid-sequence update?</p>
+  <p>We ran three arms that share model, data, GRPO implementation, batch shape, seed, library
+  versions and total GPU budget, and differ only in <strong>when each GPU does what</strong>.
+  Concurrency alone accounts for essentially all of the throughput gain. In-flight updates work
+  exactly as described — and, at two GPUs, buy nothing, because there is almost no staleness left
+  to remove. We say precisely which regime should change that.</p>
+
+  <div class="eyebrow">The setup</div>
+  <h2>Three arms, one variable.</h2>
+  <div class="grid3" style="margin-top:18px">
+    <div class="arm">
+      <span class="badge" style="background:rgba(162,118,31,.13);color:var(--ochre)">Arm A</span>
+      <h4>Conventional</h4>
+      <p>Both GPUs alternate. Generate together, stop, train together, swap weights, repeat.
+      Data is perfectly on-policy by construction. This is the colocated pattern veRL implements
+      efficiently — and which the PipelineRL authors use as their baseline.</p>
+    </div>
+    <div class="arm">
+      <span class="badge" style="background:rgba(63,92,143,.13);color:var(--slate)">Arm B</span>
+      <h4>Concurrent</h4>
+      <p>One GPU generates forever, one trains forever. Neither waits for the other's phase.
+      New weights are applied <em>between</em> generation batches — so every sequence is produced
+      by exactly one policy version.</p>
+    </div>
+    <div class="arm">
+      <span class="badge" style="background:rgba(168,60,60,.13);color:var(--brick)">Arm C</span>
+      <h4>Concurrent + in-flight</h4>
+      <p>Same partition. But weights land <em>mid-decode</em>: the engine pauses between decode
+      steps, in-flight requests and their KV blocks survive, and sequences continue under the new
+      policy. This is PipelineRL proper.</p>
+    </div>
+  </div>
+
+  <div class="callout" style="--c:var(--green)">
+    <div class="k">why this decomposition matters</div>
+    <p><strong>A → B</strong> isolates what <em>concurrency</em> buys. <strong>B → C</strong>
+    isolates what <em>in-flight weight updates</em> buy on top of it. No published measurement
+    separates the two, and it turns out they are not remotely equal partners.</p>
+  </div>
+
+  <figure>
+    <img src="assets/pb/experiment_design.png" alt="What is held fixed and what varies">
+    <figcaption>A comparison is worth nothing unless the arms differ in exactly one respect.
+    Everything on the left is identical across arms and <em>checked automatically after every
+    run</em> — including library versions, because the in-flight arm needs a newer vLLM and
+    comparing across engine versions would confound "scheduling" with "engine upgraded".</figcaption>
+  </figure>
+
+  <div class="eyebrow">Result 1</div>
+  <h2>Concurrency doubles throughput.</h2>
+
+  <table>
+    <tr><th>metric</th><th class="n">A · conventional</th><th class="n">B · concurrent</th><th class="n">C · + in-flight</th></tr>
+    <tr><td>samples / second</td><td class="n">14.34</td><td class="n">29.37</td><td class="n">27.39</td></tr>
+    <tr class="hi"><td>vs. conventional</td><td class="n">—</td><td class="n">2.05×</td><td class="n">1.91×</td></tr>
+    <tr><td>GPUs computing (mean)</td><td class="n">65.6%</td><td class="n">70.0%</td><td class="n">95.2%</td></tr>
+    <tr class="hi"><td>idle GPU-seconds</td><td class="n">1861</td><td class="n">1638</td><td class="n">258</td></tr>
+    <tr><td>optimizer steps</td><td class="n">303</td><td class="n">562</td><td class="n">514</td></tr>
+    <tr><td>weight updates, of which in-flight</td><td class="n">303 / 0</td><td class="n">562 / 0</td><td class="n">514 / <strong>514</strong></td></tr>
+    <tr><td>mean weight-push</td><td class="n">453 ms</td><td class="n">320 ms</td><td class="n">261 ms</td></tr>
+    <tr><td>mean lag (optimizer steps)</td><td class="n">0.0</td><td class="n">0.051</td><td class="n">0.035</td></tr>
+  </table>
+  <p class="cap" style="margin-left:0;text-align:left">Qwen2.5-1.5B · GSM8K · 2×H100 · 45 minutes per arm ·
+  vLLM 0.18.1. The fairness key, including library versions, matched exactly across all three arms.</p>
+
+  <figure>
+    <img src="assets/g3_gpu_utilisation.png" alt="GPU utilisation over time, one panel per arm">
+    <figcaption><strong>The whole result in one figure.</strong> Each panel is the same two H100s
+    over the same 45 minutes; the shaded area is the fraction of GPUs actually computing. The
+    white space above each curve is compute that was paid for and not used —
+    <strong>1861 GPU-seconds</strong> for conventional RL, <strong>258</strong> for the in-flight
+    pipeline. Note that <code>waiting</code> does not count as computing: a GPU blocked on an empty
+    queue is idle from the cluster's point of view.</figcaption>
+  </figure>
+
+  <div class="two">
+    <div class="txt">
+      <h3>The mechanism, not just the number</h3>
+      <p>Arm A sags on <em>every</em>
+      generate⇄train alternation — the cluster stops generating, releases its KV cache so the
+      trainer can use the memory, steps, and wakes the engine back up. Arm C is a near-solid
+      block.</p>
+      <p>That memory swap is not incidental. It is the price of colocation: our conventional arm
+      has to offload the optimizer state to host RAM on every iteration, or vLLM cannot re-map its
+      cache and the run dies with an out-of-memory error inside the allocator. veRL's HybridEngine
+      exists precisely to make that swap cheap. PipelineRL's answer is to never do it.</p>
+    </div>
+    <figure><img src="assets/pb/split_vs_colocate.png" alt="Colocate versus split"></figure>
+  </div>
+
+  <div class="eyebrow">Result 2</div>
+  <h2>In-flight updates work perfectly — and buy nothing here.</h2>
+
+  <p>All <strong>514</strong> of arm C's weight updates landed mid-decode with the KV cache
+  retained. We verified the mechanism directly on a live engine: fire a 384-token generation,
+  push weights two seconds into decoding, and check both that the request still returns and that
+  the KV block count is <em>byte-identical</em> before and after. It is. Nothing is dropped, nothing
+  is re-prefilled, and the sequence finishes with early tokens from the old policy and late tokens
+  from the new one.</p>
+
+  <div class="two rev">
+    <div class="txt">
+      <h3>So why does it not help?</h3>
+      <p>Because at two GPUs there is nothing left to fix. <strong>95% of arm B's samples are
+      already perfectly on-policy</strong> — a generation batch completes in roughly the time of one
+      optimizer step, so the weights that produced a sample are almost always the current ones.
+      In-flight updates halve a mean lag of 0.051 down to 0.035. Halving almost-zero is
+      almost-zero.</p>
+      <p>They are not free: the pause/resume cycle costs about <strong>7% throughput</strong>. At
+      this scale that is a straight loss.</p>
+      <p><strong>Where it should pay:</strong> lag grows with the ratio of generation GPUs to
+      trainers, with sequence length, and with length variance. The original paper measures 128
+      H100s and long reasoning traces — a regime where a sequence can easily outlive several
+      optimizer steps. Our result does not contradict theirs; it locates the boundary.</p>
+    </div>
+    <figure><img src="assets/pb/inflight_update.png" alt="An in-flight weight update"></figure>
+  </div>
+
+  <figure>
+    <img src="assets/g2_reward_vs_samples.png" alt="Reward versus samples generated">
+    <figcaption><strong>The control.</strong> The two concurrent arms lie on top of each other —
+    in-flight updates changed the learning curve by nothing measurable. Both sit below
+    conventional, which we deliberately do <em>not</em> attribute to the scheduler; see below.</figcaption>
+  </figure>
+
+  <div class="eyebrow">Result 3</div>
+  <h2>Small staleness, visible in the loss anyway.</h2>
+  <figure>
+    <img src="assets/g4_staleness.png" alt="Staleness distribution and clipped-token fraction">
+    <figcaption>Left: ~95% of concurrent samples are still perfectly on-policy. Right: yet the
+    fraction of tokens whose importance ratio leaves the trust region climbs from ≈0.12% to
+    ≈0.35% over training for both concurrent arms, while conventional stays flat. As the policy
+    moves faster, the same one-step lag displaces the ratio further. This is the mechanism by
+    which staleness would eventually cost you — observable here, far too small to matter.</figcaption>
+  </figure>
+
+  <div class="eyebrow">Honesty</div>
+  <h2>What we cannot claim.</h2>
+  <div class="callout" style="--c:var(--brick)">
+    <div class="k">an unattributed result</div>
+    <p>At matched sample budget — identical prompts, identical order — conventional reaches
+    <strong>0.7476</strong> against <strong>0.6978</strong> and <strong>0.6929</strong>. That gap is
+    real. We decline to attribute it to staleness, because <strong>the arms begin at different
+    rewards</strong>: 0.6650 / 0.6510 / 0.6417 over their first 10% of samples, before training
+    could possibly have separated them.</p>
+  </div>
+  <p>Same base model, same seed, same prompts. The likely cause is the generator, not the
+  scheduler: arm A generates with <code>TP=2</code> and arms B and C with <code>TP=1</code>.
+  Tensor-parallel reduction order perturbs logits at the last bit, and under temperature-1
+  sampling a perturbed logit changes the entire sampled trajectory. The arms are drawing from
+  measurably different distributions before any learning happens.</p>
+  <p><strong>Settling it needs two things:</strong> scoring a held-out set with fixed decoding
+  instead of reading reward off training rollouts, and matching generator tensor-parallelism
+  across arms. We regard the throughput and utilisation results as sound, and the learning
+  comparison as open. It is the assignment's stretch goal.</p>
+
+  <div class="callout">
+    <div class="k">scale</div>
+    <p>Two GPUs compresses the effect. The bubble grows with cluster size and sequence-length
+    variance; with a single generation GPU there is no "everyone waits for the straggler" effect
+    at all — only phase alternation. Our 2.05× is a <em>lower bound</em> on what concurrency buys.
+    Reproducing a result at the wrong scale and finding less than the authors is not a failed
+    experiment. Failing to say so would be.</p>
+  </div>
+
+  <div class="eyebrow">The harness</div>
+  <h2>A comparison tool that refuses to lie.</h2>
+  <p>Building this taught us more than the result did. <strong>Six separate bugs in our own code
+  produced confident, well-formed, wrong output</strong> rather than crashing. Each is now an
+  assertion that stops the run:</p>
+  <div class="grid2">
+    <div class="callout"><div class="k">GPU-second invariant</div><p>Every GPU is in exactly one state at every instant, so accounted GPU-seconds must equal <code>n_gpus × duration</code>. Violation means the event stream is out of order — the analyser refuses to report a utilisation split rather than reporting a plausible one.</p></div>
+    <div class="callout"><div class="k">unused-GPU check</div><p>An arm that leaves a GPU idle raced with a handicap. Our first 4-GPU run did exactly this — a single-GPU trainer given two GPUs — and the resulting "conventional wins" was an artefact of the missing GPU.</p></div>
+    <div class="callout"><div class="k">GRPO grouping</div><p>Every group must be rollouts of the <em>same</em> prompt. One rollout per prompt also satisfies a naive count check, and then the advantage baseline averages over unrelated questions. It still trains. It is not GRPO.</p></div>
+    <div class="callout"><div class="k">environment fingerprint</div><p>The fairness key includes vLLM / PyTorch / Transformers versions and GPU model. Without it, running one arm on a different engine version passes silently.</p></div>
+  </div>
+  <p>The assertions are the part of this artifact we would most encourage others to copy. A
+  comparison harness that cannot fail loudly will eventually publish something false.</p>
+
+  <div class="eyebrow">Reproduce it</div>
+  <h2>Run the race on your own GPUs.</h2>
+  <p>Everything runs on Modal. The smoke test costs a few dollars and validates all three arms
+  end-to-end before you spend anything real.</p>
+<pre><span class="c"># 0 · math invariants — seconds, free, no GPU</span>
+python3 tests/test_math.py
+
+<span class="c"># 1 · all three arms, tiny budget, 2×L4</span>
+modal run --detach runner/run_race.py::smoke
+
+<span class="c"># 2 · the real race</span>
+modal run --detach runner/run_race.py::race --gpus 2 --minutes 45 \
+  --model Qwen/Qwen2.5-1.5B-Instruct --arms all
+
+<span class="c"># 3 · validate, then publish figures + visualizer data</span>
+modal volume get race-data /runs/race1 ./runs/
+python3 scripts/publish_run.py runs/race1
+.venv-plot/bin/python scripts/four_graphs.py runs/race1 reports/race1</pre>
+  <p><code>publish_run.py</code> will refuse if any invariant fails. That is the point.</p>
+
+  <div class="eyebrow">Watch it</div>
+  <h2>See which GPU is doing what, second by second.</h2>
+  <div class="two">
+    <div class="txt">
+      <p>The visualizer replays a real run in 3D from the same <code>events.jsonl</code> the
+      figures are computed from — so the animation and the plots cannot tell different stories.
+      Each card is one physical GPU; its colour is what that GPU is doing at that instant.</p>
+      <p>The scoreboard is <strong>idle GPU-seconds</strong>: compute you paid for and did not use.
+      Watch the conventional panel drain at the end of every generation phase, and watch the
+      slate pulses in the pipeline panel — weights moving while generation continues.</p>
+      <p><a class="btn primary" href="viz/" style="margin-top:8px">◉ Open the visualizer</a></p>
+    </div>
+    <figure><img src="assets/pb/the_bubble.png" alt="Where the time goes"></figure>
+  </div>
+
+  <div class="eyebrow">Reference</div>
+  <h2 id="bibtex">Citation</h2>
+  <div class="bib">@techreport{dandekar2026race,
+  title  = {The Race: Decomposing PipelineRL into Concurrency and
+            In-Flight Weight Updates, and Measuring What Each One Buys},
+  author = {Dandekar, Rajat},
+  year   = {2026},
+  institution = {Vizuara AI Labs},
+  note   = {RL in Production, Phase 2, Project 06},
+  url    = {https://pipelinerl-race.vercel.app}
+}</div>
+
+  <h3>Built on</h3>
+  <p style="color:var(--mut);font-size:15.5px">
+    Sheng et al., <a href="https://arxiv.org/abs/2409.19256" target="_blank">HybridFlow: A Flexible and Efficient RLHF Framework</a> (veRL), arXiv:2409.19256 ·
+    Piché et al., <a href="https://arxiv.org/abs/2509.19128" target="_blank">PipelineRL</a>, arXiv:2509.19128 ·
+    Shao et al., <a href="https://arxiv.org/abs/2402.03300" target="_blank">DeepSeekMath</a> (GRPO), arXiv:2402.03300 ·
+    Cobbe et al., <a href="https://arxiv.org/abs/2110.14168" target="_blank">GSM8K</a>, arXiv:2110.14168 ·
+    reference implementation: <a href="https://github.com/ServiceNow/pipelinerl" target="_blank">ServiceNow/pipelinerl</a>
+  </p>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    <strong>Vizuara AI Labs</strong> · RL in Production, Cohort 2026 ·
+    <a href="https://rl-bootcamp-decks.vercel.app/lecture-p2-verl-pipelinerl/">lecture</a> ·
+    <a href="https://github.com/VizuaraAI/RL-in-Production-Bootcamp-Resources/tree/main/phase-2/pipelinerl-race">code</a> ·
+    <a href="assets/the-race.pdf">paper</a>
+  </div>
+</footer>
+
+</body>
+</html>
