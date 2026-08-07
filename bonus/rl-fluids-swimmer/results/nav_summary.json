@@ -1,0 +1,12 @@
+{
+  "naive": {
+    "arrival_rate": 0.5785,
+    "mean_time": 19.644338807260155,
+    "median_time": 20.0
+  },
+  "smart": {
+    "arrival_rate": 1.0,
+    "mean_time": 21.89925,
+    "median_time": 22.0
+  }
+}

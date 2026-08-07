@@ -1,0 +1,16 @@
+{
+  "learned_displacement": 0.10325486527719714,
+  "reciprocal_displacement": -0.00029182094553459326,
+  "learned_states_cycle": [
+    3,
+    1,
+    0,
+    2,
+    3,
+    1,
+    0,
+    2,
+    3
+  ],
+  "per_stroke": 0.004302286053216547
+}

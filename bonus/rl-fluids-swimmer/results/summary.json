@@ -1,0 +1,21 @@
+{
+  "naive": {
+    "mean_rise": 2.7289878216160925,
+    "std_rise": 7.33765507718016,
+    "median_rise": 2.325373987575471,
+    "frac_trapped": 0.4265
+  },
+  "smart": {
+    "mean_rise": 2.29214935246859,
+    "std_rise": 7.03534844105548,
+    "median_rise": 1.9026498375895422,
+    "frac_trapped": 0.44575
+  },
+  "ratio_mean": 0.8399265596983101,
+  "ratio_median": 0.818212402716916,
+  "env": {
+    "B": 8.0,
+    "v_s": 0.3,
+    "decision_every": 50
+  }
+}
