@@ -28,8 +28,11 @@ A $144\times 8$ Q-table reaches $\mathbf{100\%}$ arrival, discovering tacking de
 routes that exploit the domain's periodicity. \textbf{Problem 2 (gait):} the
 Najafi--Golestanian three-sphere swimmer, integrated with force-free Oseen hydrodynamics
 at every substep, must learn how to move at all against Purcell's scallop theorem. An
-\emph{eight-number} Q-table rediscovers the published non-reciprocal cycle; the reciprocal
-baseline measures $-0.0003$ body displacements over 24 strokes --- the theorem confirmed by
+\emph{eight-number} Q-table invents, from reward alone, a four-beat crawl --- squeeze one
+arm, squeeze the other, stretch the first, stretch the second, like an inchworm --- which is
+precisely the non-reciprocal cycle Najafi \& Golestanian derived by hand in 2004. The
+reciprocal baseline (flapping one arm back and forth) measures $-0.0003$ body displacements
+over 24 strokes --- the theorem confirmed by
 our own physics --- against $+0.103$ for the learned gait. We also report the instructive
 failure that preceded these results: a gyrotactic torque-control task in which an
 exact-MDP oracle proved that no policy expressible in any observation we tried could beat
@@ -139,9 +142,13 @@ states. Action: toggle one arm --- two actions. Reward: signed centre-of-mass
 displacement during the stroke. The complete policy is a $4\times2$ table:
 \textbf{eight numbers}.
 
-Q-learning ($\gamma = 0.9$, 300 episodes of 24 strokes, $\sim$40 s) converges to the
-cycle $(E,E) \to (C,E) \to (C,C) \to (E,C) \to \cdots$ --- precisely the published
-non-reciprocal stroke, discovered from reward alone. Over 24 strokes:
+Q-learning ($\gamma = 0.9$, 300 episodes of 24 strokes, $\sim$40 s) converges to a
+four-beat crawl: squeeze the left arm, squeeze the right, stretch the left, stretch the
+right, repeat --- the shape of the machine travels a \emph{loop} that never retraces
+itself, the way an inchworm bunches and extends. In the standard notation this is the cycle
+$(E,E) \to (C,E) \to (C,C) \to (E,C) \to \cdots$, precisely the stroke Najafi \&
+Golestanian derived analytically; here it is discovered from reward alone. Over 24
+strokes:
 
 \begin{center}
 \begin{tabular}{lc}

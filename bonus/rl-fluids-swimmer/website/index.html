@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teaching Two Tiny Brains to Swim — RL meets fluid mechanics</title>
+<meta name="description" content="Two laptop-scale reinforcement-learning problems in real fluid dynamics: a robot 3x slower than the current learns routes that lift arrival from 58% to 100%, and an eight-number brain invents the inchworm crawl that beats the scallop theorem. Paper, code, animations.">
+<meta property="og:title" content="Teaching Two Tiny Brains to Swim">
+<meta property="og:description" content="A thousand-number brain learns WHERE to go in a current stronger than itself. An eight-number brain learns HOW to move at all. Both on a laptop, both from a reward.">
+<meta property="og:image" content="figures_pb/w_hero.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#ffffff; --ink:#161a20; --mut:#5c626f; --line:#e8eaef; --soft:#f6f7f9;
+    --blue:#2196C9; --mag:#D400BC; --amber:#c9871a; --green:#2f7d5c; --grey:#9AA1AC;
+    --acc:#2196C9;
+    --shadow:0 14px 40px -22px rgba(30,41,59,.30);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.65;font-size:17px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+  a{color:var(--acc);text-decoration:none}
+  a:hover{text-decoration:underline}
+  h1,h2,h3{line-height:1.22;font-weight:700;letter-spacing:-.02em}
+  h2{font-size:27px;margin:56px 0 6px}
+  .eyebrow{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:500;letter-spacing:.18em;
+    text-transform:uppercase;color:var(--acc);margin:56px 0 2px}
+  .eyebrow + h2{margin-top:2px}
+  h3{font-size:19px;margin:26px 0 8px}
+  p{margin:12px 0}
+  .lead{font-size:18.5px;color:var(--mut);max-width:70ch}
+  code{background:var(--soft);border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:.86em;
+    font-family:'JetBrains Mono',ui-monospace,Menlo,monospace}
+  header{padding:52px 0 10px;text-align:center;border-bottom:1px solid var(--line)}
+  .title{font-size:44px;letter-spacing:-.03em;margin:0 0 8px}
+  .title .em{color:var(--mag)}
+  .tag{color:var(--mut);font-size:18.5px;margin:0 auto 18px;max-width:720px}
+  .authors{font-size:17px;margin:6px 0 2px}
+  .aff{color:var(--mut);font-size:15px;margin:0 0 20px}
+  .links{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:18px 0 6px}
+  .btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;
+    color:var(--ink);border-radius:10px;padding:10px 16px;font-size:15px;font-weight:600;transition:.15s;box-shadow:var(--shadow)}
+  .btn:hover{border-color:var(--acc);text-decoration:none;transform:translateY(-1px)}
+  .btn.primary{background:var(--acc);color:#fff;border-color:var(--acc)}
+  .hero{margin:30px 0 8px;text-align:center}
+  .hero img{width:100%;max-width:880px;border-radius:14px;border:1px solid var(--line);
+    box-shadow:0 18px 48px -20px rgba(30,41,59,.35)}
+  .cap{color:var(--mut);font-size:13.5px;margin:10px auto 0;max-width:720px}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:36px 0}
+  .stat{background:var(--soft);border:1px solid var(--line);border-radius:12px;padding:16px 12px;text-align:center}
+  .stat .n{font-size:27px;font-weight:800;color:var(--mag);letter-spacing:-.02em}
+  .stat .l{font-size:12.5px;color:var(--mut);margin-top:4px;line-height:1.35}
+  figure{margin:22px 0}
+  figure img{width:100%;border-radius:14px;border:1px solid var(--line);background:#fff}
+  figure.wide{width:min(1180px,calc(100vw - 40px));margin-left:50%;transform:translateX(-50%)}
+  figcaption{color:var(--mut);font-size:14px;margin-top:10px;max-width:70ch;margin-left:auto;margin-right:auto}
+  .two{display:grid;grid-template-columns:0.9fr 1.1fr;gap:36px;align-items:center;margin:14px 0}
+  .two.rev .txt{order:2} .two.rev figure{order:1}
+  .two .txt h2{margin-top:0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .callout{border-left:3px solid var(--c,var(--acc));background:var(--soft);border:1px solid var(--line);
+    border-left-width:3px;border-radius:0 12px 12px 0;padding:12px 16px;margin:16px 0}
+  .callout .k{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--c,var(--acc))}
+  .callout p{margin:4px 0 0;font-size:15px;color:var(--mut)}
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:15.5px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line)}
+  th{color:var(--mut);font-weight:600;font-size:13px;text-transform:uppercase;letter-spacing:.03em}
+  td.n{text-align:right;font-variant-numeric:tabular-nums}
+  .win{color:var(--green);font-weight:700}
+  .lose{color:#A8402F;font-weight:700}
+  pre{background:#12161d;color:#e6e9ef;border-radius:12px;padding:16px 18px;overflow-x:auto;
+    font-family:'JetBrains Mono',monospace;font-size:13.5px;line-height:1.6}
+  pre .c{color:#7f8a9e}
+  .bib{background:var(--soft);border:1px solid var(--line);border-radius:12px;padding:16px 18px;
+    font-family:'JetBrains Mono',monospace;font-size:13px;white-space:pre;overflow-x:auto;color:var(--mut)}
+  .toc{background:var(--soft);border:1px solid var(--line);border-radius:12px;padding:14px 20px;margin:24px 0;font-size:15px}
+  .toc b{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut)}
+  .toc ol{margin:8px 0 2px;padding-left:20px}
+  footer{border-top:1px solid var(--line);margin-top:64px;padding:26px 0 60px;color:var(--mut);font-size:14.5px}
+  @media(max-width:820px){.stats{grid-template-columns:1fr 1fr}.two{grid-template-columns:1fr}
+    .two.rev .txt,.two.rev figure{order:unset}.grid2{grid-template-columns:1fr}.title{font-size:33px}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <h1 class="title">Teaching two tiny brains <span class="em">to swim</span></h1>
+    <p class="tag">The same reinforcement-learning loop that trains billion-parameter language
+    models, pointed at real fluid dynamics — on a laptop, in plain numpy, in minutes. One brain
+    is about a thousand numbers. The other is <em>eight</em>.</p>
+    <p class="authors"><strong>Rajat Dandekar</strong></p>
+    <p class="aff">Vizuara AI Labs · RL in Production, Bonus Lecture</p>
+    <div class="links">
+      <a class="btn primary" href="assets/two-tiny-brains.pdf">📄 Paper (PDF)</a>
+      <a class="btn" href="https://github.com/VizuaraAI/RL-in-Production-Bootcamp-Resources/tree/main/bonus/rl-fluids-swimmer" target="_blank">⌨ Code</a>
+      <a class="btn" href="https://rl-bootcamp-decks.vercel.app/lecture-bonus-rl-fluids/" target="_blank">▦ Lecture slides</a>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="hero">
+    <img src="figures_pb/w_hero.png" alt="Two problems: where to go, and how to move at all">
+    <p class="cap">Two questions, two agents. Left: a robot slower than the current must learn
+    <strong>where to go</strong>. Right: a micro-machine must learn <strong>how to move at
+    all</strong> — because at its scale, ordinary flapping achieves exactly nothing.</p>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="n">58% → 100%</div><div class="l">arrival rate, naive vs learned navigator</div></div>
+    <div class="stat"><div class="n">8</div><div class="l">numbers in the entire swimming brain</div></div>
+    <div class="stat"><div class="n">350×</div><div class="l">learned crawl vs back-and-forth flapping</div></div>
+    <div class="stat"><div class="n">0</div><div class="l">GPUs used anywhere in this project</div></div>
+  </div>
+
+  <div class="eyebrow">Start here</div>
+  <h2>Reinforcement learning, in one paragraph.</h2>
+  <p class="lead">An agent looks at the world (the <strong>state</strong>), does something (an
+  <strong>action</strong>), and gets a number telling it how well that went (the
+  <strong>reward</strong>). It tries things, keeps what earns reward, and repeats. That is the
+  entire idea — everything else is engineering.</p>
+
+  <figure>
+    <img src="figures_pb/w_rl_loop.png" alt="The RL loop: agent, world, state, action, reward">
+    <figcaption><b>The loop does not care how big the brain is.</b> Our bootcamp's main lectures
+    put a billion-parameter language model in the agent box. Tonight we put in a lookup table —
+    in one case, just eight numbers — and the world box holds a fluid in motion. Nothing else
+    changes.</figcaption>
+  </figure>
+
+  <div class="toc">
+    <b>What follows</b>
+    <ol>
+      <li><a href="#problem1">Problem 1 — a swimmer slower than the river</a></li>
+      <li><a href="#fails">Why "aim at the target" drowns</a></li>
+      <li><a href="#learns">What the agent learns instead</a></li>
+      <li><a href="#problem2">Problem 2 — swimming in honey</a></li>
+      <li><a href="#inchworm">The inchworm crawl it invented</a></li>
+      <li><a href="#failure">The failure we kept in</a></li>
+      <li><a href="#reproduce">Run everything yourself</a></li>
+    </ol>
+  </div>
+
+  <div class="eyebrow" id="problem1">Problem 1 · Navigation</div>
+  <h2>A swimmer three times slower than the river.</h2>
+
+  <p>Imagine crossing a river to reach a dock on the far bank — but the current is three times
+  faster than you can swim. Point yourself at the dock and paddle, and the river simply carries
+  you past it. Every ferryman in history has known the answer: <strong>you do not aim at where
+  you want to go. You aim upstream, and let the river deliver you.</strong></p>
+
+  <div class="two">
+    <div class="txt">
+      <p>Our version of the river is a classic of fluid dynamics: the <strong>Taylor–Green vortex
+      lattice</strong>, a checkerboard of spinning whirlpools that is one of the very few flows
+      with an exact pen-and-paper solution. That is the whole trick that makes this a laptop
+      project — the "simulation" is two lines of numpy, so every second of compute goes into
+      learning, not physics.</p>
+      <p>The robot swims at speed 0.3. The current peaks at 1.0. It must reach a target disc on
+      the far side of the lattice.</p>
+    </div>
+    <figure><img src="figures_pb/w_river.png" alt="Why aiming at the goal fails in a strong current"></figure>
+  </div>
+
+  <p>If you took our Phase-1 lectures, you have already trained this exact problem — as the
+  <strong>windy gridworld</strong>, where a textbook wind shoves you off course. One change turns
+  that toy into physics: the wind is now a real, exactly-solved fluid, and it can be
+  <em>stronger than you</em>.</p>
+
+  <figure>
+    <img src="figures_pb/w_gridworld.png" alt="Windy gridworld with the wind replaced by a real flow">
+    <figcaption><b>Same game, real teeth.</b> The agent's world is unchanged from the textbook
+    version: its state is just which map cell it is in, its actions are eight compass headings,
+    its reward is −1 per tick and a bonus on arrival. But in the textbook you can always fight
+    through the wind. Here, wherever the opposing current beats your 0.3, fighting is
+    <em>physically impossible</em>.</figcaption>
+  </figure>
+
+  <div class="eyebrow" id="fails">Problem 1 · The baseline</div>
+  <h2>Why "aim at the target" drowns.</h2>
+
+  <div class="two rev">
+    <div class="txt">
+      <p>We gave the obvious strategy every possible courtesy: it picks, at every instant, the
+      compass heading pointing most directly at the target — chosen from the exact same eight
+      actions the learning agent gets. In still water it would be optimal.</p>
+      <p>In this current, <strong>42% of naive robots never arrive at all.</strong> The river
+      bends their path, sweeps them past the goal, and traps them in endless loops around
+      whirlpools — the tight purple spirals in the figure. They are still paddling toward the
+      target when the episode ends. Effort was never the missing ingredient.</p>
+    </div>
+    <figure><img src="figures/nav_traj_naive.png" alt="Naive trajectories: deflected, swept past, trapped in orbits"></figure>
+  </div>
+
+  <div class="eyebrow" id="learns">Problem 1 · The result</div>
+  <h2>What the agent learns instead.</h2>
+
+  <p>The learner is tabular Q-learning — the very first algorithm of our bootcamp. Its entire
+  brain is a table: one row per map cell, one column per compass heading, about a thousand
+  numbers. Five hundred robots explore in parallel, sharing that one table. Training takes
+  ninety seconds on a laptop.</p>
+
+  <figure class="wide">
+    <img src="figures/nav_race.gif" alt="Animation: naive vs learned robots racing to the target">
+    <figcaption><b>Same current, same start, same speed — 34 robots each.</b> Grey panel: aim at
+    the target. Magenta panel: the learned policy. Watch the left swarm smear into orbit around
+    the whirlpools while the right swarm files around them and lands on the target, one by one.
+    The counter tells the story.</figcaption>
+  </figure>
+
+  <table>
+    <tr><th>strategy</th><th class="n">robots that ever arrive</th><th class="n">median journey (arrivers only)</th></tr>
+    <tr><td>aim straight at the target</td><td class="n lose">57.9%</td><td class="n">18 ticks</td></tr>
+    <tr><td><b>learned (Q-table)</b></td><td class="n win">100.0%</td><td class="n">21 ticks</td></tr>
+  </table>
+
+  <p>Read that middle column honestly: the naive median <em>looks</em> competitive — but it only
+  counts the lucky 58% that made it. This is the same lesson our language-model studies keep
+  teaching: <strong>reinforcement learning's real product is reliability.</strong></p>
+
+  <div class="two">
+    <div class="txt">
+      <p>And what did it actually learn? The ferryman's trick, from scratch. Trained robots swim
+      <em>away</em> from the target first, ride a favourable jet across the lattice, and enter
+      from the far side. Some routes even wrap around the map's periodic edge — going the "wrong"
+      way around the world, because that way travels <em>with</em> the current.</p>
+      <p>Nobody engineered any of that. The reward was −1 per tick. Detours emerged because slow
+      routes and drownings punish themselves.</p>
+    </div>
+    <figure><img src="figures/nav_traj_smart.png" alt="Learned routes: detours that ride the current"></figure>
+  </div>
+
+  <figure>
+    <img src="figures/nav_policy_field.png" alt="The entire policy: one arrow per map cell">
+    <figcaption><b>The entire brain, drawn on the map.</b> One arrow per cell — the heading the
+    agent would pick there. This is every number it knows, visible at once. Try doing that with
+    a transformer. The interpretability questions are the same at every scale; only the size
+    differs.</figcaption>
+  </figure>
+
+  <div class="eyebrow" id="problem2">Problem 2 · The gait</div>
+  <h2>Now shrink ten-thousand-fold: swimming in honey.</h2>
+
+  <p>Our second agent has a stranger problem. It does not need to learn where to go. It needs to
+  learn <strong>how to move at all.</strong></p>
+
+  <div class="two">
+    <div class="txt">
+      <p>At the scale of a microbe, water stops behaving like water. Inertia — the coasting and
+      gliding your intuition is built on — becomes irrelevant: stop moving and you halt
+      <em>instantly</em>, as if swimming through honey.</p>
+      <p>In that world a brutal rule holds, called the <strong>scallop theorem</strong> (E. M.
+      Purcell, 1977): whatever a stroke pushes you forward, the exact reverse of that stroke
+      pulls you back <em>exactly as much</em>. A scallop, which can only open and close its
+      shell, is mathematically incapable of swimming. Any back-and-forth flapping, no matter how
+      fast or forceful, adds up to precisely zero.</p>
+      <p>The only escape: a stroke that <strong>never retraces itself</strong>.</p>
+    </div>
+    <figure><img src="figures_pb/w_honey.png" alt="At micro-scale, water feels like honey and reciprocal strokes cancel"></figure>
+  </div>
+
+  <figure>
+    <video controls playsinline autoplay muted loop preload="metadata"
+      poster="videos/scallop_poster.jpg" style="width:100%;border-radius:14px;border:1px solid var(--line);display:block">
+      <source src="videos/scallop_newtonian.mp4" type="video/mp4"></video>
+    <figcaption><b>The theorem, on camera.</b> A real robotic micro-scallop (about half a
+    millimetre across) flapping hard in ordinary glycerol. The white line marks where it
+    started; twelve seconds of vigorous flapping later, it has gone <em>nowhere</em> — exactly
+    as Purcell promised. Footage: Qiu et&nbsp;al., <em>Nature Communications</em> 5:5119
+    (2014), CC&nbsp;BY&nbsp;4.0.</figcaption>
+  </figure>
+
+  <p>The simplest machine that <em>can</em> escape was proposed by two physicists, Ali Najafi and
+  Ramin Golestanian, in 2004: three beads on a line, joined by two arms, each arm either long or
+  short. Four possible shapes. We simulate it with the honest physics — at every instant the
+  fluid drag on all three beads is balanced exactly (the Stokes mobility problem), so the
+  distance it moves per stroke <em>emerges</em> from hydrodynamics. It is never looked up.</p>
+
+  <div class="callout" style="--c:var(--mag)">
+    <div class="k">the learning problem</div>
+    <p><strong>State:</strong> which of the 4 shapes the machine is in. <strong>Action:</strong>
+    squeeze or stretch one of the 2 arms. <strong>Reward:</strong> how far the machine's centre
+    actually moved, signed — drifting backward punishes itself. The complete brain is a 4×2
+    table: <strong>eight numbers.</strong></p>
+  </div>
+
+  <div class="eyebrow" id="inchworm">Problem 2 · The result</div>
+  <h2>The inchworm crawl it invented.</h2>
+
+  <p>Given nothing but "how far did I move", the eight-number brain discovers a repeating
+  four-beat rhythm: <strong>squeeze the left arm, squeeze the right arm, stretch the left arm,
+  stretch the right arm — and repeat.</strong> Watch what that sequence is: each arm goes
+  long–short–long, but never in immediate reverse — the machine's shape travels a
+  <em>loop</em>, the way an inchworm bunches up and stretches out. The honey rule can only
+  cancel retraced steps, and this loop never retraces. So it crawls.</p>
+
+  <figure class="wide">
+    <img src="figures/gait_race.gif" alt="Animation: the learned inchworm crawl vs futile flapping">
+    <figcaption><b>Sixteen strokes each.</b> Top: the learned crawl inches steadily rightward.
+    Bottom: a machine flapping one arm back and forth — equally busy, and going <em>exactly</em>
+    nowhere, just as Purcell promised in 1977. Both are running the same honest hydrodynamics.</figcaption>
+  </figure>
+
+  <div class="two rev">
+    <div class="txt">
+      <p>Two things make this result satisfying. First, the flapper's measured drift after 24
+      strokes is <strong>−0.0003</strong> — our own simulation confirming a 1977 theorem to
+      round-off precision, about 350× smaller than the crawl's <strong>+0.103</strong>.</p>
+      <p>Second, the crawl the agent invented is not just <em>a</em> solution — it is
+      <em>the</em> solution physicists derived by hand two decades ago (and that an RL study by
+      Tsang et al. later rediscovered at full scale). Our eight numbers found it in forty
+      seconds of laptop time, from reward alone.</p>
+    </div>
+    <figure><img src="figures_pb/w_inchworm.png" alt="The four-beat crawl cycle in plain language"></figure>
+  </div>
+
+  <div class="two">
+    <div class="txt">
+      <h3>Nature solved the same puzzle</h3>
+      <p>This is not just a toy insight. Here is a living micro-swimmer — the alga
+      <em>Chlamydomonas</em>, about a hundredth of a millimetre, filmed under a microscope. Its
+      two little arms do a breaststroke: a fast, extended <strong>power sweep</strong> and a
+      slow, curled <strong>recovery</strong>. Fast-forward and rewind are <em>different
+      movies</em> — the stroke never retraces itself, which is precisely why it works.</p>
+      <p>Evolution found the loop-in-shape-space trick a billion years before Purcell named the
+      rule and our eight numbers rediscovered it.</p>
+    </div>
+    <figure>
+      <video controls playsinline autoplay muted loop preload="metadata"
+        poster="videos/chlamy_poster.jpg" style="width:100%;border-radius:14px;border:1px solid var(--line);display:block">
+        <source src="videos/chlamy_real_swim.mp4" type="video/mp4"></video>
+      <figcaption><b>Real footage.</b> A swimming <em>Chlamydomonas</em> cell. Qin
+      et&nbsp;al., <em>Scientific Reports</em> 5:9190 (2015), CC&nbsp;BY.</figcaption>
+    </figure>
+  </div>
+
+  <figure>
+    <img src="figures/gait_displacement.png" alt="Displacement over 24 strokes: learned crawl vs reciprocal flapping">
+    <figcaption><b>The staircase and the flatline.</b> Centre-of-mass position over 24 strokes.
+    Each riser of the magenta staircase is one beat of the crawl; the grey line is the flapper,
+    pinned to zero by the theorem.</figcaption>
+  </figure>
+
+  <div class="eyebrow" id="failure">Honesty</div>
+  <h2>The failure we kept in.</h2>
+
+  <p>This project's first environment was not the navigator. It was a more biological problem —
+  a bottom-heavy algae cell that rights itself toward "up" while vortices try to tumble it, with
+  RL nudging the righting direction. We spent hours on it. Learning flatlined, and we assumed,
+  as everyone does, that the algorithm needed tuning.</p>
+
+  <figure>
+    <img src="figures_pb/w_oracle.png" alt="The oracle: solve the small world exactly before blaming the algorithm">
+    <figcaption><b>The debugging move worth stealing.</b> A small, discrete world can be solved
+    <em>exactly</em>: record how random actions move you between states, then compute — with no
+    learning and no noise — the best any policy could possibly do. That ceiling is the number to
+    check before touching a single hyperparameter.</figcaption>
+  </figure>
+
+  <p>The oracle's verdict was final: in that environment, <strong>even a perfect brain</strong>
+  could beat the naive swimmer by at most 25% — because the vortices could spin the swimmer
+  sixteen times harder than its steering could fight. No observation we tried changed that. The
+  bottleneck was never Q-learning. It was the physics of what the agent was allowed to do.</p>
+
+  <div class="callout" style="--c:var(--amber)">
+    <div class="k">the lesson, ranked</div>
+    <p><strong>Control authority</strong> decides whether learning is possible at all.
+    <strong>What the agent senses</strong> decides how much of the possible gain it can express.
+    <strong>The algorithm</strong> only decides how fast you approach that ceiling. We rebuilt
+    the environment around meaningful control — and Problem 1 is the result. The failed world
+    ships in the repo as an open challenge.</p>
+  </div>
+
+  <div class="eyebrow" id="reproduce">Reproduce it</div>
+  <h2>Run everything yourself.</h2>
+  <p>No GPUs, no CFD software, no accounts. Two dependencies, three commands, about three
+  minutes of total compute.</p>
+<pre><span class="c"># setup</span>
+python3 -m venv .venv &amp;&amp; .venv/bin/pip install numpy matplotlib
+
+<span class="c"># problem 1 — the navigator (~90 s)</span>
+.venv/bin/python -m swimmer.navigate
+
+<span class="c"># problem 2 — the inchworm (~40 s)</span>
+.venv/bin/python -m swimmer.three_sphere
+
+<span class="c"># every figure and animation on this page, from your own runs</span>
+.venv/bin/python scripts/make_result_figures_white.py all</pre>
+
+  <p><b>Then break it.</b> Move the target and watch the policy field reorganise. Make the flow
+  unsteady and see if the naive baseline collapses further. Swap the Q-table for REINFORCE. Or
+  take the open challenge: find a regime where the abandoned algae-cell world becomes
+  learnable.</p>
+
+  <div class="eyebrow">Reference</div>
+  <h2 id="bibtex">Citation</h2>
+  <div class="bib">@techreport{dandekar2026swim,
+  title  = {Two Tiny Brains in a Fluid: Laptop-Scale Reinforcement Learning
+            for Navigation and Gait Discovery in Exactly-Solved Flows},
+  author = {Dandekar, Rajat},
+  year   = {2026},
+  institution = {Vizuara AI Labs},
+  note   = {RL in Production, Bonus Lecture},
+}</div>
+
+  <h3>Built on</h3>
+  <p style="color:var(--mut);font-size:15.5px">
+    Biferale et al., <a href="https://doi.org/10.1063/1.5120370" target="_blank">Zermelo's problem via RL</a>, Chaos 2019 ·
+    Colabrese et al., <a href="https://doi.org/10.1103/PhysRevLett.118.158004" target="_blank">smart gyrotactic microswimmers</a>, PRL 2017 ·
+    Najafi &amp; Golestanian, <a href="https://doi.org/10.1103/PhysRevE.69.062901" target="_blank">the three-sphere swimmer</a>, PRE 2004 ·
+    Tsang et al., <a href="https://doi.org/10.1103/PhysRevFluids.5.074101" target="_blank">self-learning to swim</a>, PRFluids 2020 ·
+    Purcell, <em>Life at Low Reynolds Number</em>, 1977 ·
+    Reddy et al., <a href="https://doi.org/10.1073/pnas.1606075113" target="_blank">learning to soar</a>, PNAS 2016
+  </p>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    <strong>Vizuara AI Labs</strong> · RL in Production, Cohort 2026 ·
+    <a href="https://rl-bootcamp-decks.vercel.app/lecture-bonus-rl-fluids/">slides</a> ·
+    <a href="https://github.com/VizuaraAI/RL-in-Production-Bootcamp-Resources/tree/main/bonus/rl-fluids-swimmer">code</a> ·
+    <a href="assets/two-tiny-brains.pdf">paper</a>
+  </div>
+</footer>
+
+</body>
+</html>
