@@ -1,0 +1,82 @@
+# ECHO arm — Qwen3-8B, terminal-bash (Harbor) tasks, prime-rl native ECHO.
+# GRPO on action tokens + weighted CE on env/bash observation tokens (roles.tool alpha=lambda).
+# The ONLY diff vs rl-grpo.toml is the [orchestrator.algo] block (+ zero_advantage filter).
+#   uv run rl @ configs/echo-terminal/rl-echo.toml --output-dir outputs/echo --wandb
+
+max_steps = 500
+seq_len = 16384                       # paper's 16k training window
+
+[model]
+name = "Qwen/Qwen3-8B"
+
+[deployment]
+num_infer_gpus = 4                    # 8xH100 -> 4 infer (dp=4, tp=1) + 4 train (FSDP2)
+num_train_gpus = 4
+
+[wandb]
+project = "echo-terminal"
+name = "echo-8b"
+
+[ckpt]
+interval = 25                         # checkpoint to the Volume; survive Modal 24h timeout + resume
+
+[orchestrator]
+batch_size = 16                       # paper batch = 16 prompts/step (must be a multiple of group_size)
+group_size = 16                       # paper n = 16 rollouts/prompt
+
+[orchestrator.train.sampling]
+temperature = 0.8                     # paper rollout temp (top_p is hard-coded 1.0 upstream)
+max_completion_tokens = 2048          # paper <=2048 tok/turn
+
+# ---- ECHO: GRPO(actions) + lambda*CE(observations) ----
+[orchestrator.algo]
+type = "echo"
+# bash tool output = the "environment observation" ECHO trains on.
+# Default is roles.tool alpha=0.1; we declare it explicitly and set lambda=0.05 (paper).
+# NB: if your BashHarness returns bash output as USER messages instead of tool, use roles.user.
+[orchestrator.algo.roles.tool]
+alpha = 0.05                          # ECHO's lambda (paper = 0.05)
+
+# keep zero-advantage rollouts so ECHO still learns from observation tokens
+# when the binary unit-test reward makes a group all-pass/all-fail (GRPO adv = 0).
+[[orchestrator.post_batch_filters]]
+type = "zero_advantage"
+enforce = false
+
+# ---- Harbor terminal env (your corpus) driven by the bash harness on a Modal sandbox ----
+[[orchestrator.train.env]]
+name = "terminal-bash"
+env.taskset = { id = "harbor-v1", dataset = "<your-org/your-tasks OR local loader id>" }
+env.agent.harness = { id = "bash", runtime = { type = "modal", labels = ["echo-terminal"] } }
+env.agent.timeout = { rollout = 1200 }   # paper 1200s per-task
+env.agent.max_turns = 16                  # paper <=16 turns
+
+# ---- TerminalBench-2.0 eval (avg@4), copied from glm-4.5-air/terminal.toml ----
+[orchestrator.eval]
+interval = 25
+[[orchestrator.eval.env]]
+name = "terminal-bench-2"
+group_size = 4                        # avg@4
+env.agent.harness = { id = "bash", runtime = { type = "modal", labels = ["tb2-eval"] } }
+env.agent.timeout = { rollout = 1200 }
+[orchestrator.eval.env.env.taskset]
+id = "terminal-bench-2-v1"
+[orchestrator.eval.sampling]
+temperature = 0.6                     # paper eval temp
+
+# ---- content-attributing renderer: REQUIRED so ECHO weights only message BODIES ----
+[orchestrator.renderer]
+name = "prime-qwen3"
+
+[trainer.optim]
+lr = 1e-6                             # paper (also the default); const schedule, grad clip 1.0 default
+
+[trainer.loss]
+type = "default"                      # DPPO trust region (dppo_mask 0.2 ~ eps-clip) + mismatch KL
+kl_tau = 0.0                          # paper "no KL": kill the trainer<->inference mismatch KL too
+
+[inference]
+[inference.model]
+max_model_len = 16384
+[inference.parallel]
+tp = 1                               # 8B fits on 1 GPU; dp auto-derived to 4 from num_infer_gpus

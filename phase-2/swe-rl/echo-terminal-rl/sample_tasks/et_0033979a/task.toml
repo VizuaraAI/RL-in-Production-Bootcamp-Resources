@@ -1,0 +1,20 @@
+version = "0.1"
+
+[metadata]
+author_name = "Kanishk Gandhi"
+author_email = "kanishk.gandhi@stanford.edu"
+difficulty = "easy"
+category = "programming"
+tags = ["echos"]
+
+[verifier]
+timeout_sec = 300.0
+
+[agent]
+timeout_sec = 300.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 1
+memory_mb = 2048
+storage_mb = 10240

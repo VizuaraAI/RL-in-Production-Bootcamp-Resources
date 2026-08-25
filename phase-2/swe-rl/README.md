@@ -29,7 +29,9 @@ fixed**). Full research paper + code:
 predict what the terminal will say back (`L_ECHO = L_GRPO + λ·L_env`, λ = 0.05). Learning to predict the
 computer's replies gives the agent a *world model* for almost no extra compute, roughly **doubling** GRPO in a
 controlled A/B on TerminalBench-2.0 (89 tasks). *Full 8B/14B runs are training on the cluster; the extra loss
-is verified active and the small smoke test passed.*
+is verified active and the small smoke test passed.* Code: [`echo-terminal-rl/`](echo-terminal-rl/) — the
+~62-line SkyRL patch, the terminal rollout environment (modal.Sandbox), matched GRPO-vs-ECHO configs,
+correctness tests, and the replication journal.
 
 **Homework — the un-cheatable reward.** Because the reward is "did the visible tests pass?", a clever model
 can learn to *game* the tests. One research direction (an *isomorphic perturbation reward*) re-grades each
@@ -43,6 +45,7 @@ slides/    the Slidev lecture deck (slides.md + public/figures + config) — bui
 book/      the companion book "Teaching Machines to Code" — 16 chapters (articles/*.md), the pinned FACTS.md,
            STYLE.md, build.py (static-site generator) and gen_figures.py (hand-drawn figure pipeline)
 paper/     the Project-2 research paper (PDF)
+echo-terminal-rl/  Project-3 code: the ECHO×SkyRL patch, terminal env, Modal trainers, tests, notes
 ```
 
 The **65 hand-drawn figures** live in `slides/public/figures/`; the deck and the book share them. To rebuild
@@ -53,6 +56,8 @@ the book's figures from scratch, run `book/gen_figures.py` with a `GEMINI_API_KE
 - **Project 1:** clone https://github.com/RajatDandekar/Mini-SWE-RL and follow its README (runs on a laptop).
 - **Project 2:** see [`swe-rl-ipr/`](https://github.com/RajatDandekar/Mini-SWE-RL/tree/main/swe-rl-ipr) —
   `ipr/` (the reward + env), `scripts/` (GRPO trainers for Modal), `paper/`, and the two site sources.
+- **Project 3:** see [`echo-terminal-rl/`](echo-terminal-rl/) — start with its README: verify the loss math
+  on CPU, prove the rollout cycle on one task, then run the matched GRPO-vs-ECHO A/B on Modal.
 - **The deck:** `cd slides && npm install && npm run dev` (or `npm run build`).
 
 See `RESOURCES.md` for every link in one place.

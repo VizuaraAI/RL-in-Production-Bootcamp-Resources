@@ -1,0 +1,103 @@
+diff --git a/skyrl/backends/skyrl_train/workers/worker.py b/skyrl/backends/skyrl_train/workers/worker.py
+index 96a5653..298d06a 100644
+--- a/skyrl/backends/skyrl_train/workers/worker.py
++++ b/skyrl/backends/skyrl_train/workers/worker.py
+@@ -979,14 +979,49 @@ class PolicyWorkerBase(Worker):
+                 kl_loss = torch.tensor(0.0)
+             kl_loss_term = kl_loss * self.cfg.algorithm.kl_loss_coef
+ 
++            # ---- ECHO: Environment-Prediction auxiliary loss (arxiv 2605.24517) ----
++            # L_Env = -(1/|O|) * sum_{t in O'} log p_theta(x_t | x_<t), reusing the SAME
++            # forward pass as GRPO: obs-token logprobs are already present in
++            # `action_log_probs` (it spans the full response). O = env-observation tokens
++            # (response span minus assistant-action tokens) = (action_mask>0) & (loss_mask==0).
++            # O' = the terminal-output subset (optionally excluding harness warning tokens via
++            # a generator-provided env_output_mask). Per-sequence normalized by |O| then
++            # sequence-mean, mirroring the paper (eq 1/3, §3.1). Added like KL/entropy (not
++            # pre-scaled), so it is averaged across microbatches and DP workers.
++            echo_cfg = getattr(self.cfg.algorithm, "echo", None)
++            echo_enabled = echo_cfg is not None and getattr(echo_cfg, "enabled", False)
++            env_ce = torch.tensor(0.0, device=action_log_probs.device)
++            echo_obs_tokens = 0
++            if echo_enabled and action_mask is not None and loss_mask is not None:
++                obs_total_mask = ((action_mask > 0) & (loss_mask == 0)).to(action_log_probs.dtype)  # O
++                obs_target_mask = obs_total_mask  # O' (defaults to all observation tokens)
++                env_output_mask = getattr(experience, "env_output_mask", None)
++                if getattr(echo_cfg, "exclude_warning_prefix", False) and env_output_mask is not None:
++                    obs_target_mask = obs_total_mask * env_output_mask.to(action_log_probs.dtype)
++                seq_obs_len = obs_total_mask.sum(dim=-1)  # [B] = |O_i|
++                seq_nll = (-action_log_probs * obs_target_mask).sum(dim=-1)  # [B]
++                valid = seq_obs_len > 0
++                echo_obs_tokens = int(obs_target_mask.sum().item())
++                if bool(valid.any()):
++                    seq_env = torch.where(
++                        valid, seq_nll / seq_obs_len.clamp(min=1.0), torch.zeros_like(seq_nll)
++                    )
++                    env_ce = seq_env.sum() / valid.sum().clamp(min=1)
++            env_ce_term = (echo_cfg.lambda_ * env_ce) if echo_enabled else torch.tensor(
++                0.0, device=action_log_probs.device
++            )
++
+             # DP all-reduce averages gradients, but policy losses are pre-scaled sums
+             # (see `apply_loss_reduction_to_advantages_minibatch`), so we multiply by
+             # dp_size to recover the correct sum reduction across workers.
+             grad_sum_correction_factor = self.mesh_rank.dp_size
+ 
+-            # NOTE: The KL and entropy loss terms are not pre-scaled,
++            # NOTE: The KL, entropy, and ECHO env-CE loss terms are not pre-scaled,
+             # so we just average them across microbatches and DP workers.
+-            loss = policy_loss * grad_sum_correction_factor + (kl_loss_term - entropy_loss_term) * microbatch_weight
++            loss = (
++                policy_loss * grad_sum_correction_factor
++                + (kl_loss_term - entropy_loss_term + env_ce_term) * microbatch_weight
++            )
+             unscaled_loss = loss / grad_sum_correction_factor
+             self.strategy.backward(loss, self.model, self.optimizer)
+ 
+@@ -1022,6 +1057,14 @@ class PolicyWorkerBase(Worker):
+                 status["loss_metrics/" + k] = v
+             if self.cfg.algorithm.use_kl_loss:
+                 status["policy_kl"] = kl_loss.item()
++            if echo_enabled:
++                # echo/obs_tokens > 0 confirms observation tokens live inside the response
++                # span (i.e. an interleaved multi-turn rollout, NOT step-wise mode where
++                # ECHO would be silently inert). Watch this in the first steps.
++                status["echo/env_ce"] = env_ce.item()
++                status["echo/env_ce_term"] = env_ce_term.item()
++                status["echo/obs_tokens"] = echo_obs_tokens
++                status["echo/lambda"] = float(echo_cfg.lambda_)
+             status.update(
+                 compute_minibatch_rollout_logprob_diff_metrics(action_log_probs, rollout_action_logprobs, loss_mask)
+             )
+diff --git a/skyrl/train/config/config.py b/skyrl/train/config/config.py
+index bb73cb8..4cf9a90 100644
+--- a/skyrl/train/config/config.py
++++ b/skyrl/train/config/config.py
+@@ -598,10 +598,27 @@ class OffPolicyCorrectionConfig(BaseConfig):
+     """Set to mask per-token when IS ratio > `token_mask_is_threshold_high`. ``None`` to disable."""
+ 
+ 
++# ECHO parameters (arxiv 2605.24517): auxiliary cross-entropy on environment-observation
++# tokens, added to the GRPO policy-gradient loss and reusing the SAME forward pass.
++@dataclass
++class EchoConfig(BaseConfig):
++    enabled: bool = False
++    """Enable the ECHO Environment-Prediction auxiliary loss (world-model-for-free)."""
++    lambda_: float = 0.05
++    """Mixing weight lambda for L_Env. Paper uses 0.05 (base init) / 0.02 (SFT init).
++    CLI: ``trainer.algorithm.echo.lambda_=0.05``."""
++    exclude_warning_prefix: bool = False
++    """If True and the generator provides ``experience.env_output_mask``, restrict O' to
++    terminal-output tokens and exclude harness warning-prefix tokens (paper §3.2). If no
++    env_output_mask is available this is a no-op (O' = all observation tokens)."""
++
++
+ @dataclass
+ class AlgorithmConfig(BaseConfig):
+     advantage_estimator: str = "grpo"
+     """``"grpo"``, ``"gae"``, ``"rloo"``, ``"reinforce++"``, or custom via ``AdvantageEstimatorRegistry``."""
++    echo: EchoConfig = field(default_factory=EchoConfig)
++    """ECHO auxiliary env-observation prediction loss (arxiv 2605.24517). Disabled by default."""
+     kl_ctrl: KLCtrlConfig = field(default_factory=KLCtrlConfig)
+     """Only used when ``use_kl_in_reward=True`` (not applied when ``use_kl_loss=True``).
+     Uses ``kl_loss_coef`` as the initial KL coefficient."""

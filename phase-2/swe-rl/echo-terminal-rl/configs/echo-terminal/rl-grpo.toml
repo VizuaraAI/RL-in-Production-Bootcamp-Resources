@@ -1,0 +1,69 @@
+# GRPO baseline arm — Qwen3-8B, terminal-bash (Harbor) tasks.
+# IDENTICAL to rl-echo.toml except: (a) [orchestrator.algo] type="grpo",
+# (b) no [orchestrator.algo.roles.*], (c) no zero_advantage post_batch_filter.
+# Everything else (model, batch, group_size, lr, temp, env, seq_len, renderer, loss) held fixed.
+#   uv run rl @ configs/echo-terminal/rl-grpo.toml --output-dir outputs/grpo --wandb
+
+max_steps = 500
+seq_len = 16384
+
+[model]
+name = "Qwen/Qwen3-8B"
+
+[deployment]
+num_infer_gpus = 4
+num_train_gpus = 4
+
+[wandb]
+project = "echo-terminal"
+name = "grpo-8b"
+
+[ckpt]
+interval = 25
+
+[orchestrator]
+batch_size = 16
+group_size = 16
+
+[orchestrator.train.sampling]
+temperature = 0.8
+max_completion_tokens = 2048
+
+# ---- plain GRPO: no ce_weights stream; every trainable token gets rl weight 1.0 ----
+[orchestrator.algo]
+type = "grpo"
+
+[[orchestrator.train.env]]
+name = "terminal-bash"
+env.taskset = { id = "harbor-v1", dataset = "<your-org/your-tasks OR local loader id>" }
+env.agent.harness = { id = "bash", runtime = { type = "modal", labels = ["echo-terminal"] } }
+env.agent.timeout = { rollout = 1200 }
+env.agent.max_turns = 16
+
+[orchestrator.eval]
+interval = 25
+[[orchestrator.eval.env]]
+name = "terminal-bench-2"
+group_size = 4
+env.agent.harness = { id = "bash", runtime = { type = "modal", labels = ["tb2-eval"] } }
+env.agent.timeout = { rollout = 1200 }
+[orchestrator.eval.env.env.taskset]
+id = "terminal-bench-2-v1"
+[orchestrator.eval.sampling]
+temperature = 0.6
+
+[orchestrator.renderer]
+name = "prime-qwen3"
+
+[trainer.optim]
+lr = 1e-6
+
+[trainer.loss]
+type = "default"
+kl_tau = 0.0
+
+[inference]
+[inference.model]
+max_model_len = 16384
+[inference.parallel]
+tp = 1
